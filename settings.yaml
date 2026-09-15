@@ -1,0 +1,22 @@
+# settings.yaml
+repositories:
+  database_path: "./repositories/database/app_database.db"
+  external_db_path: "/Users/dinhbinhnguyen/Dev/my-manager.v1/bin/products.db"
+  external_img_dir: "/Volumes/KINGSTON/Ext_dev/python/my-manager.v1.repositories/images/"
+  # external_db_path: "C:/Users/dinhb/Desktop/repositories/db/database.db"
+  # external_img_dir: "C:/Users/dinhb/Desktop/repositories/images_products"
+  screen_shot_dir: "./repositories/screenshots"
+  # gnirehtet_proc: "C:/Users/dinhb/Desktop/Dev/python/phonemanager_v3/repositories/gnirehtet/gnirehtet.exe"
+
+  tiktok_path: "./repositories/apks/tiktok.apk"
+  facebook_path: "./repositories/apks/facebook.apk"
+
+apk_dir: "./apks"
+
+logs:
+  directory: "./logs"
+
+redis:
+  host: "localhost"
+  port: 6379
+  db: 0

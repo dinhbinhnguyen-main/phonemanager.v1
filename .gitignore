@@ -1,0 +1,29 @@
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Environments
+.env
+.venv/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Database / temporary artifacts
+dump.rdb
+upload_progress.json
+
+# Local repository data (images/databases/apks if large/dynamic)
+# Uncomment if you want to exclude local media/databases:
+# /repositories/images/
+# /repositories/database/*.db
