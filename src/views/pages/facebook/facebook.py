@@ -231,15 +231,24 @@ class FacebookPage(QWidget, Ui_page__facebooks):
         uid_text = self.page__facebooks_search_uid_input.text().strip()
         username_text = self.page__facebooks_search_username_input.text().strip()
         group_text = self.page__facebooks_search_group_input.text().strip()
+        note_text = self.page__facebooks_search_note_input.text().strip() if hasattr(self, "page__facebooks_search_note_input") else ""
         
         filter_conditions = ["social_platform = 'facebook'"]
         
         if uid_text:
-            filter_conditions.append(f"social_id LIKE '%{uid_text}%'")
+            uids = [u.strip().replace("'", "''") for u in uid_text.split('|') if u.strip()]
+            if uids:
+                if len(uids) == 1:
+                    filter_conditions.append(f"social_id LIKE '%{uids[0]}%'")
+                else:
+                    uid_clauses = [f"social_id LIKE '%{u}%'" for u in uids]
+                    filter_conditions.append(f"({' OR '.join(uid_clauses)})")
         if username_text:
             filter_conditions.append(f"social_name LIKE '%{username_text}%'")
         if group_text:
             filter_conditions.append(f"social_group LIKE '%{group_text}%'")
+        if note_text:
+            filter_conditions.append(f"social_note LIKE '%{note_text}%'")
             
         final_filter = " AND ".join(filter_conditions)
         
@@ -286,6 +295,8 @@ class FacebookPage(QWidget, Ui_page__facebooks):
         self.page__facebooks_search_uid_input.textChanged.connect(self._apply_filters)
         self.page__facebooks_search_username_input.textChanged.connect(self._apply_filters)
         self.page__facebooks_search_group_input.textChanged.connect(self._apply_filters)
+        if hasattr(self, "page__facebooks_search_note_input"):
+            self.page__facebooks_search_note_input.textChanged.connect(self._apply_filters)
 
         # Keyboard Shortcuts
         self.shortcut_add_action = QShortcut(QKeySequence("Ctrl+N"), self)
@@ -311,6 +322,7 @@ class FacebookPage(QWidget, Ui_page__facebooks):
             social_status=int(record.value("social_status") or 0),
             social_group=int(record.value("social_group") or 0),
             social_platform=record.value("social_platform"),
+            social_note=str(record.value("social_note") or ""),
             created_at=record.value("created_at"),
             updated_at=record.value("updated_at")
         )
@@ -440,7 +452,13 @@ class FacebookPage(QWidget, Ui_page__facebooks):
                     # ==========================================
                     # ⚡ CONTENT DATA PROCESSING (EXTERNAL DATA)
                     # ==========================================
-                    if action_enum in [JobAction.FB__POST_GROUP, JobAction.FB__LIST_MARKETPLACE_AND_SHARE, JobAction.FB__LIST_GROUP_SHARE]:
+                    if action_enum in [
+                        JobAction.FB__POST_GROUP, 
+                        JobAction.FB__LIST_MARKETPLACE_AND_SHARE, 
+                        JobAction.FB__LIST_GROUP_SHARE,
+                        JobAction.FB__DISCUSSION_GROUP,
+                        JobAction.FB__SINGLE_LISTING
+                    ]:
                         source_type = params.get("source_type", "random_product")
                         trans_type = params.get("transaction_type", "sale")
                         
@@ -460,6 +478,8 @@ class FacebookPage(QWidget, Ui_page__facebooks):
                         elif source_type == "random_product":
                             params["source_type"] = "random_product"
                             params["transaction_type"] = trans_type
+
+                        params["social_note"] = getattr(social, "social_note", "")
 
                     # CREATE JOB ONCE PARAMS ARE FULLY PREPARED
                     job = Job(

@@ -8,6 +8,8 @@ from src.automation.facebook.actions.list_group_share import run_list_group_shar
 from src.automation.facebook.actions.scroll_feed import run_scroll_feed
 from src.automation.facebook.actions.join_group import run_join_group
 from src.automation.facebook.actions.post_group import run_post_group
+from src.automation.facebook.actions.discussion_group import run_discussion_group
+from src.automation.facebook.actions.single_listing import run_single_listing
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
@@ -19,6 +21,7 @@ def resolve_job_content(job: Job, controllers: Optional["ControllerManager"] = N
     """
     Dynamically generates product content and triggers AI rewrite at execution time (Just-In-Time)
     instead of generating all jobs upfront at configuration save time.
+    Enforces social_note constraints (sale -> only sale, rent -> only rental, with recent days filtering).
     """
     if not job or not job.parameters:
         return
@@ -43,27 +46,65 @@ def resolve_job_content(job: Job, controllers: Optional["ControllerManager"] = N
             return
 
         ext_ctrl = controllers.external_db_controller
-        trans_type = params.get("transaction_type", "sale")
         use_ai = params.get("use_ai", True)
+        days = int(params.get("days", 7))
         pid = params.get("product_id")
 
-        if source_type == "product_id" and pid:
-            if not ext_ctrl.get_by_pid(str(pid)):
-                if logger_signal:
-                    logger_signal.emit(f"⚠️ PID {pid} does not exist in DB. Selecting a random product ({trans_type})...")
-                pid = ext_ctrl.get_random_pid(transaction_type=trans_type)
+        # ----------------------------------------------------
+        # 📌 SOCIAL NOTE CONSTRAINT CHECKING
+        # ----------------------------------------------------
+        social = None
+        if controllers and getattr(controllers, 'social_controller', None) and job.social_uuid:
+            social = controllers.social_controller.get_by_id(job.social_uuid)
+
+        social_note = ""
+        if social and getattr(social, "social_note", None):
+            social_note = str(social.social_note).strip().lower()
+        elif params.get("social_note"):
+            social_note = str(params.get("social_note")).strip().lower()
+
+        # Constraints:
+        # social_note == 'sale' -> ONLY sale products, NO fallback, filter by recent days
+        # social_note == 'rent' / 'rental' -> ONLY rental products, NO fallback, filter by recent days
+        if social_note in ["sale", "bán", "ban"] or "sale" in social_note:
+            trans_type = "sale"
+            allow_fallback = False
+            if logger_signal:
+                logger_signal.emit(f"📌 [Constraint: social_note='{social_note}'] Strictly selecting SALE products (last {days} days, no fallback).")
+        elif social_note in ["rent", "rental", "thuê", "thue", "cho thuê"] or "rent" in social_note:
+            trans_type = "rental"
+            allow_fallback = False
+            if logger_signal:
+                logger_signal.emit(f"📌 [Constraint: social_note='{social_note}'] Strictly selecting RENTAL products (last {days} days, no fallback).")
         else:
-            pid = ext_ctrl.get_random_pid(transaction_type=trans_type)
+            trans_type = params.get("transaction_type", "sale")
+            allow_fallback = True
+
+        if source_type == "product_id" and pid:
+            existing_prod = ext_ctrl.get_by_pid(str(pid))
+            if existing_prod:
+                prod_trans_type = str(existing_prod.get("transaction_type", "")).lower()
+                # If constrained by social_note and specified pid does not match
+                if not allow_fallback and prod_trans_type != trans_type:
+                    if logger_signal:
+                        logger_signal.emit(f"⚠️ PID {pid} is '{prod_trans_type}', mismatch with social_note '{social_note}' ({trans_type}). Picking matching recent product...")
+                    pid = ext_ctrl.get_random_pid(transaction_type=trans_type, days=days, allow_fallback=False)
+            else:
+                if logger_signal:
+                    logger_signal.emit(f"⚠️ PID {pid} does not exist in DB. Selecting a random recent product ({trans_type})...")
+                pid = ext_ctrl.get_random_pid(transaction_type=trans_type, days=days, allow_fallback=allow_fallback)
+        else:
+            pid = ext_ctrl.get_random_pid(transaction_type=trans_type, days=days, allow_fallback=allow_fallback)
 
         if not pid:
-            msg = f"⚠️ No suitable product found for transaction type '{trans_type}'."
+            msg = f"⚠️ No suitable recent product (within last {days} days) found for transaction type '{trans_type}' (allow_fallback={allow_fallback})."
             if logger_signal:
                 logger_signal.emit(msg)
             logger.warning(msg)
             return
 
         if logger_signal:
-            logger_signal.emit(f"🤖 [AI Just-In-Time] Generating content & rewriting with AI for PID {pid}...")
+            logger_signal.emit(f"🤖 [AI Just-In-Time] Generating content & rewriting with AI for PID {pid} ({trans_type})...")
 
         content = ext_ctrl.generate_content_by_pid(pid, use_ai=use_ai)
         if content:
@@ -71,6 +112,7 @@ def resolve_job_content(job: Job, controllers: Optional["ControllerManager"] = N
             params["description"] = content.get("description", "")
             params["image_paths"] = content.get("image_paths", [])
             params["product_id"] = pid
+            params["transaction_type"] = trans_type
             
             title_preview = params["title"][:40] if params.get("title") else "N/A"
             if logger_signal:
@@ -101,7 +143,18 @@ def route_facebook_job(device_id: str, job: Job, logger_signal: "SignalInstance"
     action = getattr(job, 'action', '')
 
     # Resolve dynamic content & AI rewrite just-in-time before execution
-    if action in [JobAction.FB__POST_GROUP, JobAction.FB__LIST_MARKETPLACE_AND_SHARE, JobAction.FB__LIST_GROUP_SHARE, "fb_list_group_share"]:
+    if action in [
+        JobAction.FB__POST_GROUP, 
+        JobAction.FB__LIST_MARKETPLACE_AND_SHARE, 
+        JobAction.FB__LIST_GROUP_SHARE, 
+        "fb_list_group_share",
+        JobAction.FB__DISCUSSION_GROUP,
+        "fb_discussion_group",
+        "discussion_group",
+        JobAction.FB__SINGLE_LISTING,
+        "fb_single_listing",
+        "single_listing"
+    ]:
         resolve_job_content(job, controllers, logger_signal)
 
     if action == JobAction.FB__LAUNCH_APP:
@@ -121,6 +174,10 @@ def route_facebook_job(device_id: str, job: Job, logger_signal: "SignalInstance"
         run_list_marketplace_share(device_id, job, logger_signal, controllers)
     elif action == JobAction.FB__LIST_GROUP_SHARE or action == "fb_list_group_share":
         run_list_group_share(device_id, job, logger_signal, controllers)
+    elif action == JobAction.FB__DISCUSSION_GROUP or action in ["fb_discussion_group", "discussion_group"]:
+        run_discussion_group(device_id, job, logger_signal, controllers)
+    elif action == JobAction.FB__SINGLE_LISTING or action in ["fb_single_listing", "single_listing"]:
+        run_single_listing(device_id, job, logger_signal, controllers)
         
     else:
         raise ValueError(f"Facebook action '{action}' is not currently supported.")

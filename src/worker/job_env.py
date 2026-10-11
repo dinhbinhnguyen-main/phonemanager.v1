@@ -40,6 +40,7 @@ def setup_device_environment(
             return False, None, f"Could not switch to user {user.user_id}."
                         
         adb.grand_apk_permission(user_id=user.user_id, package_name="com.facebook.katana")
+        adb.disable_keyboard(user_id=user.user_id)
         
         _emit(f"🌐 [{device.device_name}] Fetching available proxy from pool...")
         proxy = controllers.proxy_controller.acquire_proxy(device.device_id, proxy_type)

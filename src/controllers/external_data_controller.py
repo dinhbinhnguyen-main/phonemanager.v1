@@ -73,37 +73,39 @@ class ExternalDataController(QObject):
             self.error_occurred.emit(str(e))
             return None
 
-    def get_random_product_for_posting(self, transaction_type: Any = "sale", days: int = 7) -> Optional[Dict[str, Any]]:
+    def get_random_product_for_posting(self, transaction_type: Any = "sale", days: int = 7, allow_fallback: bool = True) -> Optional[Dict[str, Any]]:
         """
         Selects a random product updated within a recent timeframe for automated posting.
 
         Args:
             transaction_type (Any): The transaction category code/name/enum.
             days (int): The look-back period in days. Defaults to 7.
+            allow_fallback (bool): Whether to fallback to other transaction types if no product is found.
 
         Returns:
             Optional[Dict[str, Any]]: A random product dictionary if available, otherwise None.
         """
         try:
-            return self.service.get_random_product_for_posting(transaction_type, days)
+            return self.service.get_random_product_for_posting(transaction_type, days, allow_fallback=allow_fallback)
         except Exception as e:
             logger.error(f"Error getting random product: {e}")
             self.error_occurred.emit(str(e))
             return None
 
-    def get_random_pid(self, transaction_type: Any = "sale", days: int = 7) -> Optional[str]:
+    def get_random_pid(self, transaction_type: Any = "sale", days: int = 7, allow_fallback: bool = True) -> Optional[str]:
         """
         Retrieves a random PID from recently updated products matching transaction type or fallback.
 
         Args:
             transaction_type (Any): The preferred transaction category code/name/enum.
             days (int): The look-back period in days. Defaults to 7.
+            allow_fallback (bool): Whether to fallback to other transaction types if no product is found.
 
         Returns:
             Optional[str]: A product identifier if found, otherwise None.
         """
         try:
-            return self.service.get_random_pid(transaction_type, days)
+            return self.service.get_random_pid(transaction_type, days, allow_fallback=allow_fallback)
         except Exception as e:
             logger.error(f"Error getting random PID: {e}")
             self.error_occurred.emit(str(e))

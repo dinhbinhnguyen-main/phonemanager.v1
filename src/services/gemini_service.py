@@ -17,9 +17,15 @@ class GeminiService:
 
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or self._get_api_key()
-        self.model = "gemini-3.5-flash"
+        # Primary ultra-fast model (response time ~1-2s)
+        self.model = "gemini-3.5-flash-lite"
         # Fallback models if primary model is busy or unavailable
-        self.fallback_models = ["gemini-3.1-flash-lite", "gemini-3.6-flash"]
+        self.fallback_models = [
+            "gemini-flash-lite-latest", 
+            "gemini-3.1-flash-lite", 
+            "gemini-3.5-flash", 
+            "gemini-3.7-flash"
+        ]
 
     def _get_api_key(self) -> str:
         """
@@ -107,7 +113,7 @@ class GeminiService:
         for model in models_to_try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
             try:
-                response = requests.post(url, json=payload, timeout=15.0)
+                response = requests.post(url, json=payload, timeout=30.0)
                 if response.status_code == 200:
                     data = response.json()
                     candidates = data.get("candidates", [])

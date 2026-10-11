@@ -56,6 +56,11 @@ class Ui_page__facebooks(object):
 
         self.page__facebooks_search_layout.addWidget(self.page__facebooks_search_group_input, 1, 0, 1, 1)
 
+        self.page__facebooks_search_note_input = QLineEdit(self.page__facebooks_search)
+        self.page__facebooks_search_note_input.setObjectName(u"page__facebooks_search_note_input")
+
+        self.page__facebooks_search_layout.addWidget(self.page__facebooks_search_note_input, 1, 1, 1, 1)
+
 
         self.gridLayout_3.addLayout(self.page__facebooks_search_layout, 0, 0, 1, 1)
 
@@ -201,6 +206,7 @@ class Ui_page__facebooks(object):
         self.page__facebooks_search_uid_input.setPlaceholderText(QCoreApplication.translate("page__facebooks", u"UID", None))
         self.page__facebooks_search_username_input.setPlaceholderText(QCoreApplication.translate("page__facebooks", u"Username", None))
         self.page__facebooks_search_group_input.setPlaceholderText(QCoreApplication.translate("page__facebooks", u"Group", None))
+        self.page__facebooks_search_note_input.setPlaceholderText(QCoreApplication.translate("page__facebooks", u"Note", None))
         self.page__facebooks_info_container.setTitle(QCoreApplication.translate("page__facebooks", u"Info", None))
         self.page__facebooks_info__deviceudid_label.setText(QCoreApplication.translate("page__facebooks", u"Device ID (Serial):", None))
         self.page__facebooks_info__deviceudid_info.setText(QCoreApplication.translate("page__facebooks", u"---", None))

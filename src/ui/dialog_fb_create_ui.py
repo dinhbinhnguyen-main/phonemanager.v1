@@ -112,6 +112,20 @@ class Ui_dialog__fb_create(object):
 
         self.verticalLayout.addWidget(self.fbcreatedialog__group_container)
 
+        self.fbcreatedialog__note_container = QGroupBox(dialog__fb_create)
+        self.fbcreatedialog__note_container.setObjectName(u"fbcreatedialog__note_container")
+        self.gridLayout_8 = QGridLayout(self.fbcreatedialog__note_container)
+        self.gridLayout_8.setSpacing(0)
+        self.gridLayout_8.setObjectName(u"gridLayout_8")
+        self.gridLayout_8.setContentsMargins(0, 0, 0, 0)
+        self.fbcreatedialog__note_lineedit = QLineEdit(self.fbcreatedialog__note_container)
+        self.fbcreatedialog__note_lineedit.setObjectName(u"fbcreatedialog__note_lineedit")
+
+        self.gridLayout_8.addWidget(self.fbcreatedialog__note_lineedit, 0, 0, 1, 1)
+
+
+        self.verticalLayout.addWidget(self.fbcreatedialog__note_container)
+
         self.buttonBox = QDialogButtonBox(dialog__fb_create)
         self.buttonBox.setObjectName(u"buttonBox")
         self.buttonBox.setOrientation(Qt.Orientation.Horizontal)
@@ -135,5 +149,6 @@ class Ui_dialog__fb_create(object):
         self.fbcreatedialog__2fa_container.setTitle(QCoreApplication.translate("dialog__fb_create", u"Two Factor Authentication (2FA)", None))
         self.fbcreatedialog__cookie_container.setTitle(QCoreApplication.translate("dialog__fb_create", u"Cookie", None))
         self.fbcreatedialog__group_container.setTitle(QCoreApplication.translate("dialog__fb_create", u"Group (ID)", None))
+        self.fbcreatedialog__note_container.setTitle(QCoreApplication.translate("dialog__fb_create", u"Note", None))
     # retranslateUi
 

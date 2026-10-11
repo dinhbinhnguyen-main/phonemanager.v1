@@ -40,7 +40,8 @@ class BaseTableModel(QSqlTableModel):
             "user_name", 
             "social_name", 
             "social_group", 
-            "social_password"
+            "social_password",
+            "social_note"
         ]
         
         if col_name in editable_columns:
@@ -127,6 +128,7 @@ class SocialTableModel(BaseTableModel):
             "social_group": "Group",
             "social_platform": "Platform",
             "social_password": "Password",
+            "social_note": "Note",
         }
         super().__init__(db_manager, "socials", headers)
         self.device_status_map = {}

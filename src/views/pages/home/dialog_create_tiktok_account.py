@@ -10,11 +10,13 @@ class Dialog_CreateTikTokAccount(QDialog, Ui_dialog__tt_create):
         self.ttcreatedialog__cookie_container.hide()
 
     def get_data(self) -> Social:
+        note_text = self.ttcreatedialog__note_lineedit.text().strip() if hasattr(self, "ttcreatedialog__note_lineedit") else ""
         return Social(
             social_id=self.ttcreatedialog__uid_lineedit.text().strip(),
             social_name=self.ttcreatedialog__username_lineedit.text().strip(),
             social_password=self.ttcreatedialog__password_lineedit.text().strip(),
             social_status=1,
             social_group=0,
-            social_platform="tiktok"
+            social_platform="tiktok",
+            social_note=note_text
         )

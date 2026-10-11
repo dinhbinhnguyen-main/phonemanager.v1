@@ -170,6 +170,17 @@ class DatabaseManager:
     # Schema initialization
     # --------------------------------------------------
 
+    def _run_migrations(self):
+        """Runs column migrations for existing tables if needed."""
+        if "socials" in self.db.tables():
+            query = QSqlQuery("PRAGMA table_info(socials);", self.db)
+            columns = []
+            while query.next():
+                columns.append(query.value(1))
+            if "social_note" not in columns:
+                self.execute("ALTER TABLE socials ADD COLUMN social_note TEXT DEFAULT '';")
+                logger.info("Migrated socials table: added social_note column.")
+
     def init_tables(self) -> bool:
         try:
             self._ensure_connection()
@@ -192,6 +203,8 @@ class DatabaseManager:
                         raise Exception(
                             f"Schema initialization failed for {table_sql[:20]}...: {error}"
                         )
+
+                self._run_migrations()
 
             logger.success("Database tables initialized successfully.")
             return True

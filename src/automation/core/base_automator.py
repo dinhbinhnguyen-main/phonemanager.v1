@@ -32,6 +32,7 @@ class BaseAutomator:
         
         self.d = u2.connect(device_id)
         
+        self.disable_keyboard()
         self._setup_watchers()
         self.pushed_files = []
         
@@ -85,15 +86,17 @@ class BaseAutomator:
             self.log(f"Starting application normally...")
             self.d.app_start(package_name)
 
-    def smart_sleep(self, seconds: float = 0):
+    def smart_sleep(self, min_sec: Optional[float] = None, max_sec: Optional[float] = None):
         """
         Performs a timed pause in execution.
-        
-        Args:
-            seconds (int): Duration to sleep in seconds.
+        Supports single duration (min_sec) or a random range (min_sec, max_sec).
         """
-        s = uniform(1, 3) if not seconds else seconds
-        time.sleep(s)
+        if min_sec is not None and max_sec is not None:
+            time.sleep(uniform(min_sec, max_sec))
+        elif min_sec is not None:
+            time.sleep(min_sec)
+        else:
+            time.sleep(uniform(1, 3))
     
     def get_user_media_path(self, user_id: int) -> str:
         """
@@ -109,7 +112,35 @@ class BaseAutomator:
         if int(user_id) == 0:
             return "/sdcard/Pictures/PhoneFarm/"
         return f"/storage/emulated/{user_id}/Pictures/PhoneFarm/"
-    
+
+    def clear_device_media(self, user_id: int = 0):
+        """
+        Deletes all existing images/videos from device storage and resets MediaStore database.
+        Ensures a completely clean gallery state before pushing new media.
+        """
+        user_id = int(user_id)
+        self.log(f"🧹 Clearing all existing media storage for User {user_id}...")
+        try:
+            if user_id == 0:
+                self.d.shell(
+                    "su -c 'rm -rf /sdcard/Pictures/PhoneFarm/* /sdcard/DCIM/Camera/* /sdcard/DCIM/.thumbnails/* "
+                    "/sdcard/Pictures/* /sdcard/Download/* /data/media/0/DCIM/Camera/* /data/media/0/Pictures/* 2>/dev/null; "
+                    "content delete --uri content://media/external/images/media 2>/dev/null; "
+                    "content delete --uri content://media/external/video/media 2>/dev/null'"
+                )
+            else:
+                physical_dir = f"/data/media/{user_id}/Pictures/PhoneFarm"
+                cmd = (
+                    "su -c 'rm -rf " + physical_dir + "/* /data/media/" + str(user_id) + "/DCIM/Camera/* /data/media/" + str(user_id) + "/Pictures/* 2>/dev/null; "
+                    "content delete --user " + str(user_id) + " --uri content://media/external/images/media 2>/dev/null; "
+                    "content delete --user " + str(user_id) + " --uri content://media/external/video/media 2>/dev/null'"
+                )
+                self.d.shell(cmd)
+            self.pushed_files.clear()
+            self.smart_sleep(0.5)
+        except Exception as e:
+            self.log(f"⚠️ Error while clearing media storage: {e}")
+
     def push_media(self, local_paths: List[str], user_id: int):
         """
         Transfers media files to the device storage with support for multiple user profiles.
@@ -125,11 +156,14 @@ class BaseAutomator:
             user_id (int): The target Android user profile ID.
         """
         user_id = int(user_id)
+        # 0. Delete all existing media in device and reset MediaStore before pushing
+        self.clear_device_media(user_id)
+
         virtual_dir = self.get_user_media_path(user_id)
-        
+
         if not virtual_dir.endswith('/'):
             virtual_dir += '/'
-            
+
         # 1. Directory Creation
         if user_id == 0:
             self.d.shell(f"mkdir -p \"{virtual_dir}\"")
@@ -314,23 +348,145 @@ class BaseAutomator:
         self.enable_keyboard()
         self.d.watcher.stop()
     
-    def disable_keyboard(self):
+    def get_current_user_id(self) -> int:
+        """Gets current active Android user ID."""
+        try:
+            res = self.d.shell("am get-current-user")
+            output = res.output if hasattr(res, 'output') else str(res)
+            return int(output.strip())
+        except Exception:
+            return 0
+
+    def is_keyboard_shown(self) -> bool:
+        """Checks if soft keyboard is currently visible on screen."""
+        try:
+            res = self.d.shell("dumpsys input_method")
+            output = res.output if hasattr(res, 'output') else str(res)
+            if "mInputShown=true" in output or "mIsInputViewShown=true" in output:
+                return True
+        except Exception:
+            pass
+        try:
+            for kb_id in [
+                "com.android.inputmethod.latin:id/keyboard_view",
+                "com.google.android.inputmethod.latin:id/keyboard_view",
+                "com.android.inputmethod.latin:id/main_keyboard_frame",
+                "android:id/inputArea"
+            ]:
+                if self.d(resourceId=kb_id).exists:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def hide_keyboard(self) -> bool:
+        """Actively dismisses soft keyboard if currently open."""
+        try:
+            if self.is_keyboard_shown():
+                self.d.shell("input keyevent 111")  # KEYCODE_ESCAPE
+                time.sleep(0.3)
+                return True
+            return False
+        except Exception as e:
+            self.log(f"⚠️ Error hiding keyboard: {e}")
+            return False
+
+    def disable_keyboard(self, user_id: Optional[int] = None):
         """
-        Disables the Android soft keyboard by switching to uiautomator2's FastInputIME.
+        Disables the Android soft keyboard completely across single & multi-user spaces.
+        1. Configures 'show_ime_with_hard_keyboard 0' (suppresses virtual keyboard).
+        2. Ensures FastInputIME / AdbKeyboard package is installed & enabled for user space.
+        3. Sets default IME to FastInputIME.
         """
         try:
-            self.d.set_fastinput_ime(True)
-            # self.log("⌨️ Soft keyboard disabled (FastInputIME activated).")
+            target_user = user_id if user_id is not None else self.get_current_user_id()
+            
+            # 1. Suppress soft keyboard popup globally and per-user
+            self.d.shell("settings put secure show_ime_with_hard_keyboard 0")
+            self.d.shell(f"settings put secure --user {target_user} show_ime_with_hard_keyboard 0")
+            
+            # 2. Ensure uiautomator package is installed for secondary user
+            if target_user != 0:
+                self.d.shell(f"pm install-existing --user {target_user} com.github.uiautomator")
+                self.d.shell(f"pm install-existing --user {target_user} com.github.uiautomator.test")
+                self.d.shell(f"pm install-existing --user {target_user} com.android.adbkeyboard")
+            
+            # 3. Detect FastInputIME or AdbKeyboard ID
+            ime_list_res = self.d.shell(f"ime list -s --user {target_user}")
+            ime_list_out = ime_list_res.output if hasattr(ime_list_res, 'output') else str(ime_list_res)
+            if not ime_list_out or "error" in ime_list_out.lower() or "unknown" in ime_list_out.lower():
+                ime_list_res = self.d.shell("ime list -s -a")
+                ime_list_out = ime_list_res.output if hasattr(ime_list_res, 'output') else str(ime_list_res)
+            
+            fast_ime = None
+            for candidate in [
+                "com.github.uiautomator/.FastInputIME",
+                "com.github.uiautomator.test/com.github.uiautomator.fastinput.FastInputIME",
+                "com.android.adbkeyboard/.AdbIME"
+            ]:
+                if candidate in ime_list_out or candidate.split('/')[0] in ime_list_out:
+                    fast_ime = candidate
+                    break
+            
+            if not fast_ime:
+                fast_ime = "com.github.uiautomator/.FastInputIME"
+
+            # 4. Enable and set IME for target user
+            self.d.shell(f"ime enable --user {target_user} {fast_ime}")
+            self.d.shell(f"ime set --user {target_user} {fast_ime}")
+            self.d.shell(f"settings put --user {target_user} secure default_input_method {fast_ime}")
+            
+            # Also apply for User 0
+            if target_user != 0:
+                self.d.shell(f"ime enable --user 0 {fast_ime}")
+                self.d.shell(f"ime set --user 0 {fast_ime}")
+                self.d.shell(f"settings put --user 0 secure default_input_method {fast_ime}")
+
+            # 5. Call uiautomator2's built-in setter as complementary sync
+            try:
+                self.d.set_fastinput_ime(True)
+            except Exception:
+                pass
+                
         except Exception as e:
             self.log(f"⚠️ Failed to disable keyboard: {e}")
 
-    def enable_keyboard(self):
+    def enable_keyboard(self, user_id: Optional[int] = None):
         """
         Restores the default Android soft keyboard.
         """
         try:
-            self.d.set_fastinput_ime(False)
-            # self.log("⌨️ Default soft keyboard restored.")
+            target_user = user_id if user_id is not None else self.get_current_user_id()
+            
+            # Restore show_ime_with_hard_keyboard
+            self.d.shell("settings put secure show_ime_with_hard_keyboard 1")
+            self.d.shell(f"settings put secure --user {target_user} show_ime_with_hard_keyboard 1")
+            
+            # Find default Latin/Gboard/Samsung IME if available
+            ime_list_res = self.d.shell(f"ime list -s --user {target_user}")
+            ime_list_out = ime_list_res.output if hasattr(ime_list_res, 'output') else str(ime_list_res)
+            if not ime_list_out or "error" in ime_list_out.lower():
+                ime_list_res = self.d.shell("ime list -s -a")
+                ime_list_out = ime_list_res.output if hasattr(ime_list_res, 'output') else str(ime_list_res)
+            
+            stock_ime = None
+            for line in ime_list_out.splitlines():
+                line = line.strip()
+                if not line or "uiautomator" in line or "adbkeyboard" in line:
+                    continue
+                if any(k in line for k in ["latin", "gboard", "honeyboard", "samsung", "inputmethod", "pinyin", "touchtype"]):
+                    stock_ime = line
+                    break
+            
+            if stock_ime:
+                self.d.shell(f"ime enable --user {target_user} {stock_ime}")
+                self.d.shell(f"ime set --user {target_user} {stock_ime}")
+                self.d.shell(f"settings put --user {target_user} secure default_input_method {stock_ime}")
+
+            try:
+                self.d.set_fastinput_ime(False)
+            except Exception:
+                pass
         except Exception as e:
             self.log(f"⚠️ Failed to restore keyboard: {e}")
     
@@ -339,19 +495,35 @@ class BaseAutomator:
     # ACTIONS
     #===============================
 
-    def swipe_up(self, scale: float = 0.7):
+    def swipe_up(self, scale: float = 0.5):
         """
-        Swipes the screen upward (simulating a finger sliding from bottom to top).
+        Swipes the screen upward (simulating a finger sliding from lower-middle to upper-middle).
+        Uses safe margins (25% to 70% height) to strictly avoid top status bar and bottom nav/menu bar.
         """
-        self.d.swipe_ext("up", scale=scale)
-        self.smart_sleep(1)
+        try:
+            w, h = self.d.window_size()
+            start_x = w // 2
+            start_y = int(h * 0.70)
+            end_y = max(int(h * 0.25), int(h * (0.70 - scale * 0.45)))
+            self.d.swipe(start_x, start_y, start_x, end_y, steps=12)
+            self.smart_sleep(1)
+        except Exception as e:
+            self.log(f"⚠️ Error during swipe_up: {e}")
 
-    def swipe_down(self, scale: float = 0.7):
+    def swipe_down(self, scale: float = 0.5):
         """
-        Swipes the screen downward (simulating a finger sliding from top to bottom).
+        Swipes the screen downward (simulating a finger sliding from upper-middle to lower-middle).
+        Uses safe margins (30% to 75% height) to strictly avoid top status bar and bottom nav/menu bar.
         """
-        self.d.swipe_ext("down", scale=scale)
-        self.smart_sleep(1)
+        try:
+            w, h = self.d.window_size()
+            start_x = w // 2
+            start_y = int(h * 0.30)
+            end_y = min(int(h * 0.75), int(h * (0.30 + scale * 0.45)))
+            self.d.swipe(start_x, start_y, start_x, end_y, steps=12)
+            self.smart_sleep(1)
+        except Exception as e:
+            self.log(f"⚠️ Error during swipe_down: {e}")
 
     def get_elements_by_widget(self, widget_class: str, timeout: int = 10):
         """
@@ -501,27 +673,31 @@ class BaseAutomator:
     def swipe_widget_to_center(self, widget, duration: float = 0.5) -> bool:
         """
         Swipes the screen to move a visible Widget to the center of the display.
+        Safely clamps starting coordinates between 22% and 78% height to prevent touching status bar or bottom bar.
         """
         if not widget.exists:
             self.log("⚠️ Cannot center Widget because it is not present on the screen.")
             return False
 
         try:
-            screen_info = self.d.info
-            screen_center_x = screen_info['displayWidth'] // 2
-            screen_center_y = screen_info['displayHeight'] // 2
+            w, h = self.d.window_size()
+            screen_center_x = w // 2
+            screen_center_y = h // 2
 
-            widget_center_x, widget_center_y = widget.center()
+            raw_wx, raw_wy = widget.center()
+            # Safe clamping: never start swipe directly from top status bar (y < 22%) or bottom nav bar (y > 78%)
+            widget_center_x = min(max(raw_wx, int(w * 0.15)), int(w * 0.85))
+            widget_center_y = min(max(raw_wy, int(h * 0.22)), int(h * 0.78))
 
             self.d.swipe(
                 widget_center_x, 
                 widget_center_y, 
                 screen_center_x, 
                 screen_center_y, 
-                duration=duration
+                steps=12
             )
             
-            self.smart_sleep(1)
+            self.smart_sleep(0.8)
             return True
             
         except Exception as e:

@@ -84,6 +84,20 @@ class Ui_dialog__tt_create(object):
 
         self.verticalLayout.addWidget(self.ttcreatedialog__cookie_container)
 
+        self.ttcreatedialog__note_container = QGroupBox(dialog__tt_create)
+        self.ttcreatedialog__note_container.setObjectName(u"ttcreatedialog__note_container")
+        self.gridLayout_note = QGridLayout(self.ttcreatedialog__note_container)
+        self.gridLayout_note.setSpacing(0)
+        self.gridLayout_note.setObjectName(u"gridLayout_note")
+        self.gridLayout_note.setContentsMargins(0, 0, 0, 0)
+        self.ttcreatedialog__note_lineedit = QLineEdit(self.ttcreatedialog__note_container)
+        self.ttcreatedialog__note_lineedit.setObjectName(u"ttcreatedialog__note_lineedit")
+
+        self.gridLayout_note.addWidget(self.ttcreatedialog__note_lineedit, 0, 0, 1, 1)
+
+
+        self.verticalLayout.addWidget(self.ttcreatedialog__note_container)
+
         self.buttonBox = QDialogButtonBox(dialog__tt_create)
         self.buttonBox.setObjectName(u"buttonBox")
         self.buttonBox.setOrientation(Qt.Orientation.Horizontal)
@@ -105,5 +119,6 @@ class Ui_dialog__tt_create(object):
         self.ttcreatedialog__username_container.setTitle(QCoreApplication.translate("dialog__tt_create", u"Username", None))
         self.ttcreatedialog__password_container.setTitle(QCoreApplication.translate("dialog__tt_create", u"Password", None))
         self.ttcreatedialog__cookie_container.setTitle(QCoreApplication.translate("dialog__tt_create", u"Cookie", None))
+        self.ttcreatedialog__note_container.setTitle(QCoreApplication.translate("dialog__tt_create", u"Note", None))
     # retranslateUi
 

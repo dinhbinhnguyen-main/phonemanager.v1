@@ -79,6 +79,8 @@ class JobAction(str, Enum):
     FB__INTERACT_TARGET = "fb_interact_target"     # Vào thẳng 1 bài viết/page chỉ định để tương tác
     FB__LIST_MARKETPLACE_AND_SHARE = "fb_list_marketplace_and_share"
     FB__LIST_GROUP_SHARE = "fb_list_group_share"
+    FB__DISCUSSION_GROUP = "fb_discussion_group"
+    FB__SINGLE_LISTING = "fb_single_listing"
     
     TT__LAUNCH_APP = "tt_launch_app"               # Chạy app"
     TT__WATCH_FEED = "tt_watch_feed"               # Lướt For You page

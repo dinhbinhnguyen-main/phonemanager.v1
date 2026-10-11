@@ -96,11 +96,11 @@ class ExternalDataService:
         return RealEstateProduct__TransactionType.SALE
 
     def get_random_product_for_posting(
-        self, transaction_type: Any = RealEstateProduct__TransactionType.SALE, days: int = 7
+        self, transaction_type: Any = RealEstateProduct__TransactionType.SALE, days: int = 7, allow_fallback: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Selects a random product updated within a specific timeframe for social media posting.
-        Falls back to alternative transaction type (rental <-> sale) if no product is found.
+        Falls back to alternative transaction type (rental <-> sale) if no product is found (when allow_fallback=True).
         """
         target_type = self._normalize_transaction_type(transaction_type)
         fallback_type = (
@@ -110,7 +110,7 @@ class ExternalDataService:
         )
 
         product = self.repo.get_one_recent_product(target_type, days)
-        if not product:
+        if not product and allow_fallback:
             logger.info(f"No recent product found for '{target_type.value}', falling back to '{fallback_type.value}'.")
             product = self.repo.get_one_recent_product(fallback_type, days)
 
@@ -119,12 +119,14 @@ class ExternalDataService:
             return enrich_real_estate_product(product)
 
         logger.warning(
-            f"No recent product found for transaction type {target_type.value} or fallback {fallback_type.value} in last {days} days."
+            f"No recent product found for transaction type {target_type.value}" + 
+            (f" or fallback {fallback_type.value}" if allow_fallback else "") + 
+            f" in last {days} days."
         )
         return None
 
     def get_random_pid(
-        self, transaction_type: Any = RealEstateProduct__TransactionType.SALE, days: int = 7
+        self, transaction_type: Any = RealEstateProduct__TransactionType.SALE, days: int = 7, allow_fallback: bool = True
     ) -> Optional[str]:
         """
         Retrieves a random PID from the most recent products with fallback support between rental and sale.
@@ -137,12 +139,16 @@ class ExternalDataService:
         )
 
         product = self.repo.get_one_recent_product(transaction_type=target_type, recent_day=days)
-        if not product:
+        if not product and allow_fallback:
             logger.info(f"No recent product found for '{target_type.value}', falling back to '{fallback_type.value}'.")
             product = self.repo.get_one_recent_product(transaction_type=fallback_type, recent_day=days)
 
         if not product:
-            logger.warning(f"No recent product found for both '{target_type.value}' and '{fallback_type.value}' in last {days} days.")
+            logger.warning(
+                f"No recent product found for '{target_type.value}'" + 
+                (f" and '{fallback_type.value}'" if allow_fallback else "") + 
+                f" in last {days} days."
+            )
             return None
         return product.pid
 

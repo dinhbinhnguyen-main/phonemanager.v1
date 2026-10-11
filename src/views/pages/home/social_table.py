@@ -148,6 +148,7 @@ class SocialTable(QTableView):
             social_status=int(record.value("social_status") or 0),
             social_group=int(record.value("social_group") or 0),
             social_platform=record.value("social_platform"),
+            social_note=str(record.value("social_note") or ""),
             created_at=record.value("created_at"),
             updated_at=record.value("updated_at")
         )

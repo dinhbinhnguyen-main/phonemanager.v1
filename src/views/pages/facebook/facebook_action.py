@@ -123,6 +123,14 @@ class FacebookAction(QGroupBox, Ui_action):
         self.action__content_list_group_layout = QVBoxLayout(self.action__content_list_group_container)
         self.action__content.addWidget(self.action__content_list_group_container)
 
+        self.action__content_discussion_group_container = QWidget()
+        self.action__content_discussion_group_layout = QVBoxLayout(self.action__content_discussion_group_container)
+        self.action__content.addWidget(self.action__content_discussion_group_container)
+
+        self.action__content_single_listing_container = QWidget()
+        self.action__content_single_listing_layout = QVBoxLayout(self.action__content_single_listing_container)
+        self.action__content.addWidget(self.action__content_single_listing_container)
+
         self.page_mapping = {
             JobAction.FB__SCROLL_FEED: self.action__content_scroll_feed_container,
             JobAction.FB__INTERACT_FEED: self.action__content_interact_feed_container,
@@ -130,7 +138,9 @@ class FacebookAction(QGroupBox, Ui_action):
             JobAction.FB__POST_GROUP: self.action__content_post_group_container,
             JobAction.FB__INTERACT_TARGET: self.action__content_interact_target_container,
             JobAction.FB__LIST_MARKETPLACE_AND_SHARE: self.action__content_list_marketplace_container,
-            JobAction.FB__LIST_GROUP_SHARE: self.action__content_list_group_container
+            JobAction.FB__LIST_GROUP_SHARE: self.action__content_list_group_container,
+            JobAction.FB__DISCUSSION_GROUP: self.action__content_discussion_group_container,
+            JobAction.FB__SINGLE_LISTING: self.action__content_single_listing_container
         }
 
         self._setup_combobox()
@@ -141,6 +151,8 @@ class FacebookAction(QGroupBox, Ui_action):
         self._build_post_group_ui()
         self._build_list_marketplace_ui()
         self._build_list_group_ui()
+        self._build_discussion_group_ui()
+        self._build_single_listing_ui()
         
         self.action__actions_option.currentIndexChanged.connect(self._on_action_changed)
         self.action__delete_btn.clicked.connect(self.deleteLater)
@@ -154,6 +166,8 @@ class FacebookAction(QGroupBox, Ui_action):
             ("Interact with Target", JobAction.FB__INTERACT_TARGET),
             ("List Marketplace & Share", JobAction.FB__LIST_MARKETPLACE_AND_SHARE),
             ("List Group & Share", JobAction.FB__LIST_GROUP_SHARE),
+            ("Discussion Group", JobAction.FB__DISCUSSION_GROUP),
+            ("Single Listing (Auto 3 Groups)", JobAction.FB__SINGLE_LISTING),
         ]
         for label, enum_val in options:
             self.action__actions_option.addItem(label, userData=enum_val)
@@ -338,6 +352,10 @@ class FacebookAction(QGroupBox, Ui_action):
                 row += 1
                 
         layout.addLayout(source_grid)
+
+        self.pg_use_ai = QCheckBox("Sử dụng AI viết lại nội dung (Gemini AI)")
+        self.pg_use_ai.setChecked(True)
+        layout.addWidget(self.pg_use_ai)
         
         self.pg_pid_container = QWidget()
         pg_pid_layout = QVBoxLayout(self.pg_pid_container)
@@ -372,6 +390,7 @@ class FacebookAction(QGroupBox, Ui_action):
         if checked:
             self.pg_pid_container.setVisible(btn_id == 0)
             self.pg_custom_container.setVisible(btn_id == 2)
+            self.pg_use_ai.setVisible(btn_id != 2)
 
     def _build_list_marketplace_ui(self) -> None:
         layout = self.action__content_list_marketplace_layout
@@ -410,6 +429,10 @@ class FacebookAction(QGroupBox, Ui_action):
                 row += 1
                 
         layout.addLayout(source_grid)
+
+        self.mp_use_ai = QCheckBox("Sử dụng AI viết lại nội dung (Gemini AI)")
+        self.mp_use_ai.setChecked(True)
+        layout.addWidget(self.mp_use_ai)
         
         self.mp_pid_container = QWidget()
         mp_pid_layout = QVBoxLayout(self.mp_pid_container)
@@ -444,6 +467,7 @@ class FacebookAction(QGroupBox, Ui_action):
         if checked:
             self.mp_pid_container.setVisible(btn_id == 0)
             self.mp_custom_container.setVisible(btn_id == 2)
+            self.mp_use_ai.setVisible(btn_id != 2)
 
     def _build_list_group_ui(self) -> None:
         layout = self.action__content_list_group_layout
@@ -491,6 +515,10 @@ class FacebookAction(QGroupBox, Ui_action):
                 row += 1
                 
         layout.addLayout(source_grid)
+
+        self.lg_use_ai = QCheckBox("Sử dụng AI viết lại nội dung (Gemini AI)")
+        self.lg_use_ai.setChecked(True)
+        layout.addWidget(self.lg_use_ai)
         
         self.lg_pid_container = QWidget()
         lg_pid_layout = QVBoxLayout(self.lg_pid_container)
@@ -525,6 +553,174 @@ class FacebookAction(QGroupBox, Ui_action):
         if checked:
             self.lg_pid_container.setVisible(btn_id == 0)
             self.lg_custom_container.setVisible(btn_id == 2)
+            self.lg_use_ai.setVisible(btn_id != 2)
+
+    def _build_discussion_group_ui(self) -> None:
+        layout = self.action__content_discussion_group_layout
+        
+        row_target = QHBoxLayout()
+        row_target.addWidget(QLabel("Target Group (UID / URL - Optional):"))
+        self.dg_group_uid = QLineEdit()
+        self.dg_group_uid.setPlaceholderText("Leave empty for auto/random group matching transaction type")
+        row_target.addWidget(self.dg_group_uid)
+        layout.addLayout(row_target)
+
+        row_type = QHBoxLayout()
+        row_type.addWidget(QLabel("Transaction Type:"))
+        self.dg_transaction_type = QComboBox()
+        self.dg_transaction_type.addItem("Rental (Cho thuê)", "rental")
+        self.dg_transaction_type.addItem("Sale (Bán / Mua bán)", "sale")
+        row_type.addWidget(self.dg_transaction_type)
+
+        row_type.addWidget(QLabel("Max Scrolls:"))
+        self.dg_max_scrolls = QSpinBox()
+        self.dg_max_scrolls.setRange(0, 10)
+        self.dg_max_scrolls.setValue(2)
+        row_type.addWidget(self.dg_max_scrolls)
+        layout.addLayout(row_type)
+        
+        layout.addWidget(QLabel("Content Source:"))
+        self.dg_source_group = QButtonGroup(self)
+        
+        source_grid = QGridLayout()
+        source_grid.setSpacing(5)
+        sources = ["Product ID", "Random Product", "Custom Content"]
+        
+        row, col = 0, 0
+        for i, s in enumerate(sources):
+            rb = QRadioButton(s)
+            if i == 0: rb.setChecked(True)
+            self.dg_source_group.addButton(rb, i)
+            
+            source_grid.addWidget(rb, row, col)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+                
+        layout.addLayout(source_grid)
+
+        self.dg_use_ai = QCheckBox("Sử dụng AI viết lại nội dung (Gemini AI)")
+        self.dg_use_ai.setChecked(True)
+        layout.addWidget(self.dg_use_ai)
+        
+        self.dg_pid_container = QWidget()
+        dg_pid_layout = QVBoxLayout(self.dg_pid_container)
+        dg_pid_layout.setContentsMargins(0, 0, 0, 0)
+        row_pid = QHBoxLayout()
+        row_pid.addWidget(QLabel("Product ID:"))
+        self.dg_product_id = QLineEdit()
+        row_pid.addWidget(self.dg_product_id)
+        dg_pid_layout.addLayout(row_pid)
+        
+        self.dg_custom_container = QWidget()
+        dg_custom_layout = QVBoxLayout(self.dg_custom_container)
+        dg_custom_layout.setContentsMargins(0, 0, 0, 0)
+        dg_custom_layout.addWidget(QLabel("Custom Title:"))
+        self.dg_custom_title = QLineEdit()
+        dg_custom_layout.addWidget(self.dg_custom_title)
+        dg_custom_layout.addWidget(QLabel("Custom Description:"))
+        self.dg_custom_desc = QTextEdit()
+        self.dg_custom_desc.setMaximumHeight(50)
+        dg_custom_layout.addWidget(self.dg_custom_desc)
+        dg_custom_layout.addWidget(QLabel("Custom Images (Drag & Drop or Double-click):"))
+        self.dg_custom_images = ImageDropWidget()
+        dg_custom_layout.addWidget(self.dg_custom_images)
+        
+        layout.addWidget(self.dg_pid_container)
+        layout.addWidget(self.dg_custom_container)
+        self.dg_custom_container.setVisible(False)
+        self.dg_source_group.idToggled.connect(self._on_dg_source_toggled)
+        layout.addStretch()
+
+    def _on_dg_source_toggled(self, btn_id: int, checked: bool) -> None:
+        if checked:
+            self.dg_pid_container.setVisible(btn_id == 0)
+            self.dg_custom_container.setVisible(btn_id == 2)
+            self.dg_use_ai.setVisible(btn_id != 2)
+
+    def _build_single_listing_ui(self) -> None:
+        layout = self.action__content_single_listing_layout
+        
+        row_count = QHBoxLayout()
+        row_count.addWidget(QLabel("Number of Groups:"))
+        self.sl_group_count = QSpinBox()
+        self.sl_group_count.setRange(1, 20)
+        self.sl_group_count.setValue(3)
+        row_count.addWidget(self.sl_group_count)
+
+        row_count.addWidget(QLabel("Transaction Type:"))
+        self.sl_transaction_type = QComboBox()
+        self.sl_transaction_type.addItem("Sale (Bán / Mua bán)", "sale")
+        self.sl_transaction_type.addItem("Rental (Cho thuê)", "rental")
+        row_count.addWidget(self.sl_transaction_type)
+
+        row_count.addWidget(QLabel("Max Scrolls:"))
+        self.sl_max_scrolls = QSpinBox()
+        self.sl_max_scrolls.setRange(0, 10)
+        self.sl_max_scrolls.setValue(2)
+        row_count.addWidget(self.sl_max_scrolls)
+        layout.addLayout(row_count)
+        
+        layout.addWidget(QLabel("Content Source:"))
+        self.sl_source_group = QButtonGroup(self)
+        
+        source_grid = QGridLayout()
+        source_grid.setSpacing(5)
+        sources = ["Product ID", "Random Product", "Custom Content"]
+        
+        row, col = 0, 0
+        for i, s in enumerate(sources):
+            rb = QRadioButton(s)
+            if i == 0: rb.setChecked(True)
+            self.sl_source_group.addButton(rb, i)
+            
+            source_grid.addWidget(rb, row, col)
+            col += 1
+            if col > 1:
+                col = 0
+                row += 1
+                
+        layout.addLayout(source_grid)
+
+        self.sl_use_ai = QCheckBox("Sử dụng AI viết lại nội dung (Gemini AI)")
+        self.sl_use_ai.setChecked(True)
+        layout.addWidget(self.sl_use_ai)
+        
+        self.sl_pid_container = QWidget()
+        sl_pid_layout = QVBoxLayout(self.sl_pid_container)
+        sl_pid_layout.setContentsMargins(0, 0, 0, 0)
+        row_pid = QHBoxLayout()
+        row_pid.addWidget(QLabel("Product ID:"))
+        self.sl_product_id = QLineEdit()
+        row_pid.addWidget(self.sl_product_id)
+        sl_pid_layout.addLayout(row_pid)
+        
+        self.sl_custom_container = QWidget()
+        sl_custom_layout = QVBoxLayout(self.sl_custom_container)
+        sl_custom_layout.setContentsMargins(0, 0, 0, 0)
+        sl_custom_layout.addWidget(QLabel("Custom Title:"))
+        self.sl_custom_title = QLineEdit()
+        sl_custom_layout.addWidget(self.sl_custom_title)
+        sl_custom_layout.addWidget(QLabel("Custom Description:"))
+        self.sl_custom_desc = QTextEdit()
+        self.sl_custom_desc.setMaximumHeight(50)
+        sl_custom_layout.addWidget(self.sl_custom_desc)
+        sl_custom_layout.addWidget(QLabel("Custom Images (Drag & Drop or Double-click):"))
+        self.sl_custom_images = ImageDropWidget()
+        sl_custom_layout.addWidget(self.sl_custom_images)
+        
+        layout.addWidget(self.sl_pid_container)
+        layout.addWidget(self.sl_custom_container)
+        self.sl_custom_container.setVisible(False)
+        self.sl_source_group.idToggled.connect(self._on_sl_source_toggled)
+        layout.addStretch()
+
+    def _on_sl_source_toggled(self, btn_id: int, checked: bool) -> None:
+        if checked:
+            self.sl_pid_container.setVisible(btn_id == 0)
+            self.sl_custom_container.setVisible(btn_id == 2)
+            self.sl_use_ai.setVisible(btn_id != 2)
 
     def get_value(self) -> Optional[dict]:
         """
@@ -573,6 +769,7 @@ class FacebookAction(QGroupBox, Ui_action):
             data["params"]["post_mode"] = self.pg_mode_combo.currentData()
             source_id = self.pg_source_group.checkedId()
             data["params"]["source_type"] = source_keys[source_id]
+            data["params"]["use_ai"] = self.pg_use_ai.isChecked() if source_id != 2 else False
             if source_id == 0:
                 data["params"]["product_id"] = self.pg_product_id.text()
             elif source_id == 2:
@@ -585,6 +782,7 @@ class FacebookAction(QGroupBox, Ui_action):
             data["params"]["transaction_type"] = self.mp_transaction_type.currentData() or self.mp_transaction_type.currentText().lower()
             source_id = self.mp_source_group.checkedId()
             data["params"]["source_type"] = source_keys[source_id]
+            data["params"]["use_ai"] = self.mp_use_ai.isChecked() if source_id != 2 else False
             if source_id == 0:
                 data["params"]["product_id"] = self.mp_product_id.text()
             elif source_id == 2:
@@ -599,11 +797,40 @@ class FacebookAction(QGroupBox, Ui_action):
             data["params"]["transaction_type"] = self.lg_transaction_type.currentData() or self.lg_transaction_type.currentText().lower()
             source_id = self.lg_source_group.checkedId()
             data["params"]["source_type"] = source_keys[source_id]
+            data["params"]["use_ai"] = self.lg_use_ai.isChecked() if source_id != 2 else False
             if source_id == 0:
                 data["params"]["product_id"] = self.lg_product_id.text()
             elif source_id == 2:
                 data["params"]["custom_title"] = self.lg_custom_title.text()
                 data["params"]["custom_desc"] = self.lg_custom_desc.toPlainText()
                 data["params"]["custom_images"] = self.lg_custom_images.get_paths()
+
+        elif action == JobAction.FB__DISCUSSION_GROUP:
+            data["params"]["group_uid"] = self.dg_group_uid.text()
+            data["params"]["transaction_type"] = self.dg_transaction_type.currentData() or self.dg_transaction_type.currentText().lower()
+            data["params"]["max_scrolls"] = self.dg_max_scrolls.value()
+            source_id = self.dg_source_group.checkedId()
+            data["params"]["source_type"] = source_keys[source_id]
+            data["params"]["use_ai"] = self.dg_use_ai.isChecked() if source_id != 2 else False
+            if source_id == 0:
+                data["params"]["product_id"] = self.dg_product_id.text()
+            elif source_id == 2:
+                data["params"]["custom_title"] = self.dg_custom_title.text()
+                data["params"]["custom_desc"] = self.dg_custom_desc.toPlainText()
+                data["params"]["custom_images"] = self.dg_custom_images.get_paths()
+
+        elif action == JobAction.FB__SINGLE_LISTING:
+            data["params"]["group_count"] = self.sl_group_count.value()
+            data["params"]["transaction_type"] = self.sl_transaction_type.currentData() or self.sl_transaction_type.currentText().lower()
+            data["params"]["max_scrolls"] = self.sl_max_scrolls.value()
+            source_id = self.sl_source_group.checkedId()
+            data["params"]["source_type"] = source_keys[source_id]
+            data["params"]["use_ai"] = self.sl_use_ai.isChecked() if source_id != 2 else False
+            if source_id == 0:
+                data["params"]["product_id"] = self.sl_product_id.text()
+            elif source_id == 2:
+                data["params"]["custom_title"] = self.sl_custom_title.text()
+                data["params"]["custom_desc"] = self.sl_custom_desc.toPlainText()
+                data["params"]["custom_images"] = self.sl_custom_images.get_paths()
 
         return data

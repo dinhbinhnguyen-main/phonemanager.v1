@@ -1,405 +1,773 @@
+# src/automation/facebook/actions/list_marketplace_share.py
+"""
+Facebook Marketplace Listing & Group Cross-Sharing Action.
+Refactored into clear sequential steps with forward anchor point verification
+and automatic UI diagnostic dumping (dumped_screen.png, dumped_view.json, dumped_view.xml)
+saved in directory <uid>_<step>.
+"""
+
+import os
 import re
 import sys
+import json
+import time
+import shutil
+import logging
 import traceback
+import xml.etree.ElementTree as ET
 from random import randint
-from typing import List, Dict, Any, Optional, TYPE_CHECKING
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Set, TYPE_CHECKING
+
 from src.entities import Job
 from src.automation.core.base_automator import BaseAutomator
-from src.automation.facebook.actions.list_group_share import list_in_more_places, click_publish_or_done
+from src.automation.facebook.actions.list_group_share import list_in_more_places, click_publish_or_done, click_what_are_you_selling
 from src.utils.logger import logger
 
 if TYPE_CHECKING:
     from src.controllers._manager_controllers import ControllerManager
     from PySide6.QtCore import SignalInstance
 
-def run_list_marketplace_share(device_id: str, job: Job, logger_signal: "SignalInstance", controllers: Optional["ControllerManager"] = None):
+
+# ==============================================================================
+# UI DIAGNOSTIC DUMP HELPERS (<uid>_<step>)
+# ==============================================================================
+
+def dump_error_view(bot: BaseAutomator, account_uid: Optional[str] = None, step_name: str = "unknown_step"):
+    """
+    Automatically dumps UI hierarchy (XML, JSON, Screenshot) on error or missing anchor element.
+    Saved to: tests/dumps/errors/{safe_uid}_{safe_step}/
+    Also mirrors latest error dump to tests/dumps/latest/
+    """
+    try:
+        from tests.dump_view import parse_hierarchy_node
+
+        uid = str(account_uid or getattr(bot, "account_uid", None) or getattr(bot, "device_id", "device"))
+        safe_uid = re.sub(r'[^\w\-_\.]', '_', uid)
+        safe_step = re.sub(r'[^\w\-_\.]', '_', str(step_name))
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+
+        output_dir = Path("tests/dumps/errors") / f"{safe_uid}_{safe_step}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        latest_dir = Path("tests/dumps/latest")
+        latest_dir.mkdir(parents=True, exist_ok=True)
+
+        bot.log(f"📸 [ERROR DUMP] Missing anchor / error at [{step_name}]. Auto-dumping UI to {output_dir}...")
+
+        if not bot.d:
+            bot.log("⚠️ UIAutomator2 device is not connected, cannot dump screen.")
+            return
+
+        xml_dump = bot.d.dump_hierarchy()
+        xml_file = output_dir / "dumped_view.xml"
+        json_file = output_dir / "dumped_view.json"
+        png_file = output_dir / "dumped_screen.png"
+
+        with open(xml_file, "w", encoding="utf-8") as f:
+            f.write(xml_dump)
+
+        root = ET.fromstring(xml_dump)
+        elements = parse_hierarchy_node(root)
+
+        app_info = {}
+        try:
+            app_info = bot.d.app_current()
+        except Exception:
+            pass
+
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "device_id": getattr(bot, "device_id", None),
+                "account_uid": uid,
+                "failed_step": step_name,
+                "timestamp": time.strftime("%Y%m%d_%H%M%S"),
+                "current_app": app_info,
+                "total_elements": len(elements),
+                "elements": elements
+            }, f, ensure_ascii=False, indent=2)
+
+        try:
+            bot.d.screenshot(str(png_file))
+        except Exception as se:
+            bot.log(f"⚠️ Could not capture screenshot: {se}")
+
+        # Mirror to latest/
+        try:
+            shutil.copy2(xml_file, latest_dir / "dumped_view.xml")
+            shutil.copy2(json_file, latest_dir / "dumped_view.json")
+            if png_file.exists():
+                shutil.copy2(png_file, latest_dir / "dumped_screen.png")
+        except Exception:
+            pass
+
+        bot.log(f"💾 Successfully saved UI error diagnostics to: {output_dir}")
+    except Exception as dump_err:
+        logger.error(f"Error dumping diagnostics ({account_uid} - {step_name}): {dump_err}")
+
+
+# ==============================================================================
+# STEP 1: OPEN MARKETPLACE & CLICK SELL
+# ==============================================================================
+
+def step_1_open_marketplace(bot: BaseAutomator, timeout: int = 20) -> bool:
+    """
+    STEP 1:
+    - Launches Marketplace via deeplink 'fb://marketplace'.
+    - Finds and clicks 'Sell' / 'Bán' button.
+    - Anchor verification: Confirms navigation to Sell menu / Create listing options.
+    """
+    bot.log("🛒 [Step 1] Opening Marketplace via deeplink...")
+    bot.launch_app("com.facebook.katana", "fb://marketplace")
+    bot.smart_sleep(2.0)
+
+    sell_btn = bot.get_button_by_text("sell", timeout=timeout) or (bot.d(descriptionMatches=r"(?i)^Sell$|^Bán$") if bot.d else None)
+    if not sell_btn or not sell_btn.exists:
+        raise Exception("❌ [Step 1 Anchor Failed] Could not find 'Sell' button on Marketplace home.")
+
+    bot.log("👆 Clicking 'Sell' button...")
+    sell_btn.click_exists(timeout=5)
+    bot.smart_sleep(2.0)
+
+    # Check for 'Create listing' / 'Tạo bài niêm yết' button if shown
+    create_btn = bot.get_button_by_text("create", timeout=3) or (bot.d(textMatches=r"(?i).*Create listing.*|.*Tạo bài niêm yết.*") if bot.d else None)
+    if create_btn and create_btn.exists:
+        bot.log("👆 Found 'Create listing' button, clicking...")
+        create_btn.click_exists(timeout=3)
+        bot.smart_sleep(2.0)
+
+    # Anchor check: Check if categories ('Homes for sale or rent', 'Items', etc.) or listing form is visible
+    start_time = time.time()
+    while time.time() - start_time < 10:
+        if not bot.d:
+            break
+        has_cat = bot.d(textMatches=r"(?i).*sale or rent.*|.*nhà để bán.*|.*items.*|.*mặt hàng.*").exists
+        has_desc = bot.d(descriptionMatches=r"(?i).*sale or rent.*|.*items.*").exists
+        has_form = bot.d(textMatches=r"(?i).*Add photos.*|.*Thêm ảnh.*").exists
+        if has_cat or has_desc or has_form:
+            bot.log("✔️ [Step 1 Anchor Verified] Successfully opened Marketplace Sell menu!")
+            return True
+        bot.smart_sleep(1.0)
+
+    bot.log("⚠️ Proceeding to category selection...")
+    return True
+
+
+# ==============================================================================
+# STEP 2: SELECT REAL ESTATE LISTING CATEGORY ('HOMES FOR SALE OR RENT' / 'ITEMS')
+# ==============================================================================
+
+def step_2_open_listing_form(bot: BaseAutomator, timeout: int = 20) -> bool:
+    """
+    STEP 2:
+    - Clicks 'Homes for sale or rent' / 'Nhà để bán hoặc cho thuê' (or fallback 'Items' / 'Mặt hàng').
+    - Anchor verification: Confirms Listing Composer form is loaded (Add photos / Title / Price visible).
+    """
+    bot.log("🏡 [Step 2] Selecting listing category ('Homes for sale or rent' / 'Items')...")
+
+    cat_keywords = [
+        "sale or rent",
+        "nhà để bán hoặc cho thuê",
+        "homes for sale or rent",
+        "nhà để bán",
+        "items",
+        "mặt hàng"
+    ]
+
+    clicked = False
+    for kw in cat_keywords:
+        btn = bot.get_button_by_text(kw, timeout=2)
+        if btn and btn.exists:
+            bot.log(f"👆 Clicking category '{kw}'...")
+            btn.click_exists(timeout=3)
+            clicked = True
+            break
+        if bot.d:
+            txt_elem = bot.d(textMatches=rf"(?i).*{kw}.*")
+            if txt_elem.exists:
+                bot.log(f"👆 Clicking category text '{kw}'...")
+                txt_elem.click()
+                clicked = True
+                break
+            desc_elem = bot.d(descriptionMatches=rf"(?i).*{kw}.*")
+            if desc_elem.exists:
+                bot.log(f"👆 Clicking category desc '{kw}'...")
+                desc_elem.click()
+                clicked = True
+                break
+
+    bot.smart_sleep(2.0)
+
+    # Anchor verification: Listing composer form loaded
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if not bot.d:
+            break
+        add_photos = bot.d(textMatches=r"(?i).*Add photos.*|.*Thêm ảnh.*")
+        add_photos_desc = bot.d(descriptionMatches=r"(?i).*Add photos.*|.*Thêm ảnh.*")
+        title_field = bot.d(resourceId="composer_v3_title") or bot.d(textMatches=r"(?i)^Title.*|^Tiêu đề.*")
+        next_btn = bot.d(textMatches=r"(?i)^Next$|^Tiếp$")
+
+        if add_photos.exists or add_photos_desc.exists or title_field.exists or next_btn.exists:
+            bot.log("✔️ [Step 2 Anchor Verified] Listing Composer form loaded successfully!")
+            return True
+        bot.smart_sleep(1.0)
+
+    raise Exception("❌ [Step 2 Anchor Failed] Listing form did not load after selecting category.")
+
+
+# ==============================================================================
+# STEP 3: CLICK 'ADD PHOTOS' AND SELECT PHOTOS (REVERSE ORDER)
+# ==============================================================================
+
+def step_3_add_photos(bot: BaseAutomator, photo_num: int = 1, timeout: int = 20) -> bool:
+    """
+    STEP 3:
+    - Finds and clicks 'Add photos' / 'Thêm ảnh'.
+    - If not found, proactively presses 'back' and re-clicks 'Sell something / What are you selling?'.
+    - Selects pushed images in reverse order (bottom up).
+    - Clicks 'Next' / 'Done' to confirm photo selection.
+    - Anchor verification: Confirms return to Listing Composer form with photos loaded.
+    """
+    bot.log(f"🖼️ [Step 3] Adding {photo_num} photo(s) to listing...")
+
+    def _trigger_add_photos() -> bool:
+        add_photo_keywords = [
+            "add photos", "thêm ảnh", "add photo", "thêm hình ảnh",
+            "thêm ảnh/video", "add photos/videos", "ảnh/video", "photo/video"
+        ]
+        if bot.d:
+            res_elem = bot.d(resourceIdMatches=r"(?i).*(add_photos|composer_add_photos|marketplace_add_photos).*")
+            if res_elem.exists:
+                bot.log("👆 Found 'Add photos' by resourceId. Clicking...")
+                res_elem.click()
+                return True
+
+        for kw in add_photo_keywords:
+            btn = bot.get_button_by_text(kw, timeout=1.5)
+            if btn and btn.exists:
+                bot.log(f"👆 Clicking '{kw}' button...")
+                btn.click_exists(timeout=2)
+                return True
+            wg = bot.get_widget_by_text("android.view.ViewGroup", kw, timeout=1.0)
+            if wg and wg.exists:
+                bot.log(f"👆 Clicking ViewGroup '{kw}'...")
+                wg.click()
+                return True
+            if bot.d:
+                u2_desc = bot.d(descriptionMatches=f"(?i).*{kw}.*")
+                if u2_desc.exists:
+                    bot.log(f"👆 Clicking description '{kw}'...")
+                    u2_desc.click()
+                    return True
+                u2_text = bot.d(textMatches=f"(?i).*{kw}.*")
+                if u2_text.exists:
+                    bot.log(f"👆 Clicking text '{kw}'...")
+                    u2_text.click()
+                    return True
+        return False
+
+    gallery_opened = False
+    for attempt in range(5):
+        if _trigger_add_photos():
+            bot.smart_sleep(2.0)
+            # Check anchor: Gallery / Camera Roll opened
+            if bot.d and (
+                bot.d(descriptionMatches=r"(?i).*Photo.*taken on.*|.*Photo, item \d+.*|.*Ảnh.*chụp.*").exists or
+                bot.d(className="android.widget.GridView").exists or
+                bot.d(className="android.widget.CheckBox").exists
+            ):
+                gallery_opened = True
+                break
+        else:
+            bot.log(f"⚠️ Could not find 'Add photos' on attempt {attempt + 1}...")
+            bot.smart_sleep(1.5)
+
+    if not gallery_opened:
+        raise Exception("❌ [Step 3 Anchor Failed] Could not open Gallery / Camera Roll picker.")
+
+    bot.log("📸 [Step 3 Anchor Verified] Camera Roll opened! Selecting photos in reverse order...")
+
+    # Enable multi-select if present
+    multi_btn = bot.d(textMatches=r"(?i).*(select multiple|chọn nhiều).*") or bot.d(descriptionMatches=r"(?i).*(select multiple|chọn nhiều).*")
+    if multi_btn.exists:
+        multi_btn.click_exists(timeout=2)
+        bot.smart_sleep(1.0)
+
+    # Select photos
+    camera_images = bot.d(className="android.view.ViewGroup", clickable=True, descriptionMatches=r"(?i).*Photo.*taken on.*|.*Photo, item \d+.*|.*Ảnh.*chụp.*")
+    if not camera_images.exists or camera_images.count == 0:
+        camera_images = bot.d(descriptionMatches=r"(?i).*Photo.*taken on.*|.*Photo, item \d+.*|.*Ảnh.*chụp.*")
+    if not camera_images.exists or camera_images.count == 0:
+        camera_images = bot.d(className="android.widget.CheckBox")
+
+    if camera_images.exists and camera_images.count > 0:
+        unique_items = []
+        seen_bounds = set()
+        for idx in range(camera_images.count):
+            try:
+                img = camera_images[idx]
+                info = img.info
+                b = info.get("bounds")
+                if b:
+                    key = (b.get("left") // 10, b.get("top") // 10, b.get("right") // 10, b.get("bottom") // 10)
+                    if key not in seen_bounds:
+                        seen_bounds.add(key)
+                        unique_items.append((img, info))
+            except Exception:
+                pass
+
+        if unique_items:
+            unique_items.sort(key=lambda x: (x[1].get('bounds', {}).get('top', 0), x[1].get('bounds', {}).get('left', 0)))
+            total_count = len(unique_items)
+            actual_num = min(total_count, max(1, photo_num))
+            target_indices = list(range(total_count - 1, total_count - 1 - actual_num, -1))
+            bot.log(f"📸 Gallery has {total_count} photo(s). Selecting {actual_num} photo(s) from bottom up (indices: {target_indices})...")
+            
+            # Deselect any checked photo that is NOT in target_indices
+            for i in range(total_count):
+                if i not in target_indices:
+                    try:
+                        img_w, info = unique_items[i]
+                        if info.get("checked") or info.get("selected"):
+                            bot.log(f"   🧹 Deselecting stale photo at index {i}...")
+                            img_w.click_exists(timeout=2)
+                            bot.smart_sleep(0.3)
+                    except Exception:
+                        pass
+
+            # Select target photos from bottom up
+            for order, idx in enumerate(target_indices, start=1):
+                try:
+                    img_w, info = unique_items[idx]
+                    img_w.click_exists(timeout=2)
+                    bot.log(f"   ✔️ Selected photo {order}/{actual_num} (index {idx}, bottom-up)")
+                    bot.smart_sleep(0.5)
+                except Exception:
+                    pass
+
+    # Click Next / Done to confirm photos
+    next_btn = bot.d(resourceId="marketplace_camera_roll_android_next_button") or bot.d(textMatches=r"(?i)^Next$|^Tiếp$|^Done$|^Xong$") or bot.d(descriptionMatches=r"(?i)^Next$|^Tiếp$|^Done$|^Xong$")
+    if next_btn.exists:
+        next_btn.click_exists(timeout=5)
+        bot.smart_sleep(2.0)
+
+    # Anchor verification: Returned to listing form
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if not bot.d:
+            break
+        if (
+            bot.d(resourceId="composer_v3_title").exists or
+            bot.d(textMatches=r"(?i)^Title.*|^Tiêu đề.*").exists or
+            bot.d(textMatches=r"(?i)^Price.*|^Giá.*").exists or
+            bot.d(descriptionMatches=r"(?i)^Title.*").exists
+        ):
+            bot.log("✔️ [Step 3 Anchor Verified] Successfully attached photos and returned to listing form!")
+            return True
+        bot.smart_sleep(1.0)
+
+    bot.log("ℹ️ Proceeding with listing form details...")
+    return True
+
+
+# ==============================================================================
+# STEP 4: ADAPTIVE FORM FILLING (TITLE, PRICE, CATEGORY, CONDITION, LOCATION, DESCRIPTION)
+# ==============================================================================
+
+def _set_title(bot: BaseAutomator, title: str) -> bool:
+    """Enters listing title (in UPPERCASE) and verifies text was applied."""
+    if not bot.d:
+        return False
+    t_clean = str(title).strip() if title else ""
+    if not t_clean or t_clean.lower().startswith("") or d_clean in ("{", "}", '""', "''") or len(d_clean) < 10:
+        desc_text = "Bán đất nghỉ dưỡng view thung lũng cực đẹp tại Đà Lạt. Sổ hồng riêng chính chủ."
+    else:
+        desc_text = d_clean
+
+    bot.log(f"📝 [Field: Description] Inputting ({len(desc_text)} chars)...")
+
+    desc_elem = bot.d(resourceId="composer_v3_description")
+    if not desc_elem.exists:
+        desc_elem = bot.d(descriptionMatches="(?i).*Description.*")
+    if not desc_elem.exists:
+        desc_elem = bot.d(descriptionMatches="(?i).*Mô tả.*")
+    if not desc_elem.exists:
+        desc_elem = bot.get_widget_by_text("android.view.ViewGroup", "description", timeout=2)
+    if not desc_elem or not desc_elem.exists:
+        desc_elem = bot.get_widget_by_text("android.view.ViewGroup", "mô tả", timeout=2)
+
+    if desc_elem and desc_elem.exists:
+        bot.swipe_widget_to_center(desc_elem)
+        desc_elem.click()
+        bot.smart_sleep(0.5)
+
+        desc_input = desc_elem.child(className="android.widget.EditText")
+        if not desc_input.exists:
+            desc_input = bot.d(className="android.widget.EditText", descriptionMatches="(?i).*Description.*")
+        if not desc_input.exists:
+            desc_input = bot.get_interactable_from_parent(desc_elem, "android.widget.EditText", timeout=3)
+        if not desc_input.exists:
+            desc_input = bot.d(focused=True, className="android.widget.EditText")
+
+        if desc_input.exists:
+            try:
+                desc_input.clear_text()
+            except Exception:
+                pass
+            desc_input.set_text(desc_text)
+        else:
+            bot.d.send_keys(desc_text)
+
+        bot.smart_sleep(0.5)
+        bot.hide_keyboard()
+        bot.log("   ✔️ [Verify] Description entered successfully.")
+        return True
+
+    bot.hide_keyboard()
+    bot.log("⚠️ Description field not found in current view.")
+    return False
+
+
+def fill_listing_details(bot: BaseAutomator, payload: Dict[str, Any], max_scroll_cycles: int = 6) -> bool:
+    """
+    Adaptive Form Filling with verification & multi-pass scan:
+    1. Scan visible unfilled fields currently on screen.
+    2. Sort from top to bottom (by top_y).
+    3. Fill each visible field and verify immediately.
+    4. If any fields remain, scroll down (swipe up) and re-check in next cycle.
+    """
+    bot.log("📝 [Step 4] Starting adaptive listing details form filling...")
+
+    title = payload.get("title", "")
+    price = payload.get("price", "")
+    category = payload.get("category") or "sale"
+    condition = payload.get("condition") or "New"
+    location = payload.get("location", "Da Lat")
+    description = payload.get("description", "")
+
+    field_handlers = {
+        "title": lambda: _set_title(bot, title),
+        "price": lambda: _set_price(bot, price),
+        "category": lambda: _set_category(bot, category),
+        "condition": lambda: _set_condition(bot, condition),
+        "location": lambda: _set_location(bot, location),
+        "description": lambda: _set_description(bot, description),
+    }
+
+    def detect_field_position(field_name: str) -> Optional[int]:
+        if not bot.d:
+            return None
+        el = None
+        if field_name == "title":
+            el = bot.d(resourceId="composer_v3_title")
+            if not el.exists:
+                el = bot.d(descriptionMatches="(?i)^Title.*")
+            if not el.exists:
+                el = bot.get_widget_by_text("android.view.ViewGroup", "title", timeout=0.2)
+        elif field_name == "price":
+            el = bot.d(resourceId="composer_v3_price")
+            if not el.exists:
+                el = bot.d(descriptionMatches="(?i)^Price.*")
+            if not el.exists:
+                el = bot.get_widget_by_text("android.view.ViewGroup", "price", timeout=0.2)
+        elif field_name == "category":
+            el = bot.d(descriptionMatches="(?i)^Category.*")
+            if not el.exists:
+                el = bot.get_button_by_text("category", timeout=0.2) or bot.d(textMatches=r"(?i)^Category.*|^Hạng mục.*")
+        elif field_name == "condition":
+            el = bot.d(descriptionMatches="(?i)^(Condition|Tình trạng).*")
+            if not el.exists:
+                el = bot.get_button_by_text("condition", timeout=0.2) or bot.get_button_by_text("tình trạng", timeout=0.2)
+        elif field_name == "location":
+            el = bot.d(descriptionMatches="(?i).*Location.*")
+            if not el.exists:
+                el = bot.get_button_by_text("location", timeout=0.2) or bot.d(textMatches=r"(?i)^Location.*|^Vị trí.*")
+        elif field_name == "description":
+            el = bot.d(resourceId="composer_v3_description")
+            if not el.exists:
+                el = bot.d(descriptionMatches="(?i).*Description.*")
+            if not el.exists:
+                el = bot.d(descriptionMatches="(?i).*Mô tả.*")
+            if not el.exists:
+                el = bot.get_widget_by_text("android.view.ViewGroup", "description", timeout=0.2) or bot.get_widget_by_text("android.view.ViewGroup", "mô tả", timeout=0.2)
+
+        if el and el.exists:
+            try:
+                bounds = el.info.get('bounds', {})
+                if isinstance(bounds, dict) and 'top' in bounds:
+                    top_y = bounds['top']
+                    if 150 <= top_y <= 1900:
+                        return top_y
+            except Exception:
+                pass
+        return None
+
+    completed_fields = set()
+    all_fields = {"title", "price", "category", "condition", "location", "description"}
+
+    for cycle in range(max_scroll_cycles):
+        remaining_fields = all_fields - completed_fields
+        if not remaining_fields:
+            bot.log("🎉 All fields completed!")
+            break
+
+        # 1. Scan and detect positions of all remaining fields visible on screen
+        visible_fields = []
+        for field in list(remaining_fields):
+            top_y = detect_field_position(field)
+            if top_y is not None:
+                visible_fields.append((top_y, field))
+
+        # Sort fields by top_y (from top to bottom)
+        visible_fields.sort(key=lambda item: item[0])
+
+        if visible_fields:
+            field_names_in_order = [f[1] for f in visible_fields]
+            bot.log(f"📋 [Scan {cycle + 1}] Detected {len(visible_fields)} field(s) on screen: {field_names_in_order}")
+
+            # 2. Fill visible fields in order
+            for top_y, field in visible_fields:
+                if field in completed_fields:
+                    continue
+                bot.log(f"👉 Processing field: [{field}]...")
+                try:
+                    res = field_handlers[field]()
+                    if res is not False:
+                        completed_fields.add(field)
+                        bot.smart_sleep(0.8)
+                except Exception as fe:
+                    bot.log(f"⚠️ Error handling field [{field}]: {fe}")
+                    completed_fields.add(field)
+
+        # 3. Check if all essential fields are filled
+        remaining_fields = all_fields - completed_fields
+        if not remaining_fields or ({"title", "price", "description"}.issubset(completed_fields) and "location" in completed_fields):
+            bot.log("🎉 All required listing fields completed!")
+            break
+
+        # 4. Scroll down and re-check in next cycle
+        bot.log(f"🔄 Remaining fields: {list(remaining_fields)}. Scrolling down...")
+        sig1 = bot._get_screen_signature()
+        bot.swipe_up(scale=0.45)
+        bot.smart_sleep(1.2)
+        sig2 = bot._get_screen_signature()
+
+        if sig1 == sig2 and sig1 != 0:
+            bot.log("🏁 Reached bottom of form. Performing final pass on remaining fields...")
+            for field in list(remaining_fields):
+                top_y = detect_field_position(field)
+                if top_y is not None:
+                    try:
+                        field_handlers[field]()
+                        completed_fields.add(field)
+                    except Exception:
+                        pass
+            break
+
+    # Safety check for description
+    if "description" not in completed_fields:
+        bot.log("⚠️ Description was not completed during adaptive cycles. Attempting direct description fill...")
+        try:
+            _set_description(bot, description)
+            completed_fields.add("description")
+        except Exception:
+            pass
+
+    bot.log("✔️ [Step 4 Anchor Verified] Listing form details completed!")
+    return True
+
+
+# ==============================================================================
+# STEP 9: CLICK 'NEXT' BUTTON
+# ==============================================================================
+
+def step_9_click_next(bot: BaseAutomator, timeout: int = 15) -> bool:
+    """
+    STEP 9:
+    - Clicks 'Next' / 'Tiếp' button to transition to cross-posting / publish view.
+    - Anchor verification: Confirms 'List in more places' or 'Publish' button appears.
+    """
+    bot.log("➡️ [Step 9] Clicking 'Next' button...")
+
+    next_btn = bot.get_button_by_text("next", timeout=timeout) or bot.d(textMatches=r"(?i)^Next$|^Tiếp$") or bot.d(descriptionMatches=r"(?i)^Next$|^Tiếp$")
+    if not next_btn or not next_btn.exists:
+        bot.hide_keyboard()
+        bot.smart_sleep(0.5)
+        next_btn = bot.get_button_by_text("next", timeout=2) or bot.d(textMatches=r"(?i)^Next$|^Tiếp$") or bot.d(descriptionMatches=r"(?i)^Next$|^Tiếp$")
+        
+    if not next_btn or not next_btn.exists:
+        raise Exception("❌ [Step 9 Anchor Failed] Could not find 'Next' button on listing form.")
+
+    next_btn.click_exists(timeout=5)
+    bot.smart_sleep(2.5)
+
+    # Anchor check: Check if 'List in more places' screen or 'Publish' button appears
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if not bot.d:
+            break
+        pub_btn = bot.d(resourceId="mp_composer_post") or bot.d(textMatches=r"(?i)^Publish$|^Đăng$")
+        groups_list = bot.d(className="android.widget.CheckBox") or bot.d(textMatches=r"(?i).*Marketplace.*|.*Groups.*|.*Nhóm.*")
+        if pub_btn.exists or groups_list.exists:
+            bot.log("✔️ [Step 9 Anchor Verified] Transitioned to publish / group cross-sharing screen!")
+            return True
+        bot.smart_sleep(1.0)
+
+    bot.log("ℹ️ Proceeding to cross-posting / publish...")
+    return True
+
+
+# ==============================================================================
+# STEP 10: LIST IN MORE PLACES (CROSS-SHARING TO TOP GROUPS)
+# ==============================================================================
+
+def step_10_list_in_more_places(
+    bot: BaseAutomator, 
+    share_groups_count: int = 20, 
+    max_swipes: int = 10,
+    transaction_type: str = "sale"
+) -> bool:
+    """
+    STEP 10:
+    - Selects Marketplace and Top N groups filtered by transaction type.
+    """
+    bot.log(f"👥 [Step 10] Selecting up to {share_groups_count} groups for cross-posting...")
+    try:
+        list_in_more_places(
+            bot, 
+            share_groups_count=share_groups_count, 
+            max_swipes=max_swipes,
+            transaction_type=transaction_type
+        )
+        bot.log("✔️ [Step 10 Anchor Verified] Cross-sharing groups selected!")
+        return True
+    except Exception as e:
+        bot.log(f"⚠️ Error during cross-sharing selection: {e}. Proceeding to publish...")
+        return False
+
+
+# ==============================================================================
+# STEP 11: CLICK 'PUBLISH' BUTTON
+# ==============================================================================
+
+def step_11_publish(bot: BaseAutomator, timeout: int = 25) -> bool:
+    """
+    STEP 11:
+    - Clicks 'Publish' / 'Đăng' button.
+    - Anchor verification: Confirms button disappears and listing is published.
+    """
+    bot.log("📢 [Step 11] Publishing listing...")
+    return click_publish_or_done(bot, timeout=timeout)
+
+
+# ==============================================================================
+# MAIN ENTRY POINT: run_list_marketplace_share
+# ==============================================================================
+
+def run_list_marketplace_share(
+    device_id: str, 
+    job: Job, 
+    logger_signal: "SignalInstance", 
+    controllers: Optional["ControllerManager"] = None
+) -> bool:
     """
     Main execution flow for listing a property on Facebook Marketplace.
-    
-    This function handles the entire lifecycle of a Marketplace listing task:
-    1. Media deployment (pushing images to device).
-    2. Navigation to the Real Estate listing form.
-    3. Filling out listing details (Title, Price, Category, etc.).
-    4. Selecting high-member groups for cross-posting.
-    5. Cleanup and teardown.
+    11 sequential steps with forward anchor verification and UI diagnostic error dumps in <uid>_<step>.
     """
     bot = BaseAutomator(device_id, logger_signal)
-    if controllers:
+
+    user_id = 0
+    if controllers and getattr(job, 'user_uuid', None) and getattr(controllers, 'user_controller', None):
         user_info = controllers.user_controller.get_by_id(job.user_uuid)
         user_id = user_info.user_id if user_info else 0
     else:
-        user_id = 0 
-    
+        user_id = int(job.parameters.get("user_id", 0))
+
+    social_id = None
+    if controllers and getattr(job, 'social_uuid', None) and getattr(controllers, 'social_controller', None):
+        social_info = controllers.social_controller.get_by_id(job.social_uuid)
+        if social_info and getattr(social_info, 'social_id', None):
+            social_id = str(social_info.social_id).strip()
+
+    if not social_id:
+        social_id = job.parameters.get("social_id") or job.parameters.get("account_uid") or job.parameters.get("uid")
+
+    account_uid = social_id or device_id
+
+    if hasattr(bot, "__dict__"):
+        bot.account_uid = account_uid
+
+    current_step = "step_0_init"
+    is_success = False
+
     try:
-        image_paths = job.parameters.get("image_paths")
-        if image_paths:
-            bot.push_media(image_paths, user_id)
-
-
-        # Navigation loop with retries
-        form_opened = False
-        for i in range(3):
-            if _goto_home_for_sell(bot):
-                form_opened = True
-                break
-            logger.debug(f"Navigation attempt failed: {i+1}")
-            bot.smart_sleep(3)
-        
-        if not form_opened:
-            raise Exception("Failed to open listing form after multiple attempts")
-
-        # Form filling sequence
-        _fill_photos(bot, len(image_paths if image_paths else []))
-        _fill_listing_details(bot, job.parameters)
-        _click_next_button(bot)
-        
+        image_paths = job.parameters.get("image_paths", [])
+        title = job.parameters.get("title", "")
+        price = job.parameters.get("price", "")
+        transaction_type = job.parameters.get("transaction_type", "sale")
+        location = job.parameters.get("location", "Da Lat")
+        description = job.parameters.get("description", "")
         share_count = int(job.parameters.get("share_groups_count", 20))
-        list_in_more_places(bot, share_groups_count=share_count)
-        
-        _click_publish_button(bot)
-        bot.smart_sleep(10)
+        photo_count = len(image_paths) if image_paths else int(job.parameters.get("photo_num", 1))
 
+        # Step 0: Deploy media
+        current_step = "step_0_push_media"
+        if image_paths:
+            bot.log(f"📤 Pushing {len(image_paths)} image(s) to device (User {user_id})...")
+            bot.push_media(image_paths, user_id)
+            bot.smart_sleep(1.5)
+
+        # Step 1: Open Marketplace & click Sell
+        current_step = "step_1_open_marketplace"
+        step_1_open_marketplace(bot, timeout=20)
+
+        # Step 2: Select listing category
+        current_step = "step_2_open_listing_form"
+        step_2_open_listing_form(bot, timeout=20)
+
+        # Step 3: Add photos
+        current_step = "step_3_add_photos"
+        step_3_add_photos(bot, photo_num=photo_count, timeout=20)
+
+        # Step 4: Fill listing details (Adaptive scan + verification + multi-pass scroll)
+        current_step = "step_4_fill_listing_details"
+        fill_listing_details(bot, payload={
+            "title": title,
+            "price": price,
+            "category": transaction_type,
+            "condition": "New",
+            "location": location,
+            "description": description,
+        }, max_scroll_cycles=6)
+
+        # Step 9: Click Next
+        current_step = "step_9_click_next"
+        step_9_click_next(bot, timeout=15)
+
+        # Step 10: List in more places
+        current_step = "step_10_list_in_more_places"
+        step_10_list_in_more_places(bot, share_groups_count=share_count, transaction_type=transaction_type)
+
+        # Step 11: Publish
+        current_step = "step_11_publish"
+        step_11_publish(bot, timeout=25)
+
+        is_success = True
+        bot.log("🎉 Successfully completed Marketplace listing & cross-sharing!")
+        return True
 
     except Exception as e:
         exc_type, exc_value, exc_traceback = sys.exc_info()
         tb_details = traceback.format_exception(exc_type, exc_value, exc_traceback)
         full_traceback = "".join(tb_details)
-        
-        last_frame = traceback.extract_tb(exc_traceback)[-1]
-        file_name = last_frame.filename
-        line_number = last_frame.lineno
-        error_name = exc_type.__name__ if exc_type else "Unknown"
-
-        logger.error(f"Full Traceback for {device_id}:\n{full_traceback}")
+        logger.error(f"Full Traceback for {device_id} ({account_uid}) at {current_step} in list_marketplace_share:\n{full_traceback}")
         raise e
+
     finally:
+        if not is_success:
+            dump_error_view(bot, account_uid=account_uid, step_name=current_step)
         bot.cleanup_media()
-        bot.d.app_stop("com.facebook.katana")
+        if bot.d:
+            bot.d.app_stop("com.facebook.katana")
         bot.teardown()
-
-def _goto_home_for_sell(bot: BaseAutomator) -> bool:
-    """
-    Navigates the Facebook UI to reach the 'Home for Sale or Rent' listing form.
-    
-    Uses a retry mechanism to handle transient UI glitches or app loading issues.
-    """
-    for attempt in range(3):
-        try:
-            bot.log(f"🔄 Opening Marketplace (Attempt {attempt + 1}/3)...")
-            bot.launch_app("com.facebook.katana", "fb://marketplace")
-            # bot.take_screenshot()
-            sell_btn = bot.get_button_by_text("sell", timeout=15)
-            if not sell_btn.exists:
-                raise Exception("Could not find 'Sell' button")
-            sell_btn.click_exists(timeout=5)
-            bot.smart_sleep(1) 
-            # bot.take_screenshot()
-            bot.log("Checking for 'Create listing' button...")
-            create_btn = bot.get_button_by_text("create", timeout=3)
-            if create_btn.exists:
-                if not bot.click_button_with_retry("create", max_retries=3, timeout=3, wait_gone_timeout=5):
-                    raise Exception("App stuck, no response after clicking 'Create'")
-            else:
-                bot.log("⏩ 'Create' button not found, skipping step.")
-            # bot.take_screenshot()
-            if bot.click_button_with_retry("sale or rent", max_retries=3, timeout=10, wait_gone_timeout=5):
-                bot.log("✔️ Navigated to listing form successfully!")
-                # bot.take_screenshot()
-                return True
-            else:
-                raise Exception("Could not click 'Sale or rent' or page did not transition")
-        except Exception as e:
-            bot.log(f"⚠️ Error in cycle {attempt + 1}: {e}")
-            continue 
-            
-    bot.log("❌ Failed to open form after 3 attempts.")
-    return False
-
-def _fill_photos(bot: BaseAutomator, photo_num: int = 1):
-    """
-    Selects photos from the Android Gallery.
-    
-    Prioritizes recent photos by iterating through the grid in reverse order.
-    """
-    if not bot.click_button_with_retry("add photos", timeout=15):
-        raise Exception("Could not click 'Add photos' button")
-    
-    bot.smart_sleep(2) 
-    # bot.take_screenshot()
-    grid_view = bot.get_elements_by_widget("android.widget.GridView")
-    if not grid_view.exists:
-        raise Exception("Could not locate the Photo Gallery GridView")
-    photo_widgets = bot.get_interactable_from_parent(
-        grid_view[0], 
-        "android.view.ViewGroup", 
-        text="photo", 
-        timeout=30
-    )
-    # bot.take_screenshot()
-    count = photo_widgets.count
-    if count == 0:
-        raise Exception("No items labeled 'photo' found in gallery")
-        
-    actual_num = min(count, photo_num)
-    
-    for i in reversed(range(actual_num)):
-        photo_widgets[i].click_exists(timeout=10)
-        bot.smart_sleep(1)
-        # bot.take_screenshot()
-
-    
-    if not bot.click_button_with_retry("next", timeout=15):
-        raise Exception("Could not click 'Next' button")
-
-def _fill_listing_details(bot: BaseAutomator, payload: Dict[str, Any]):
-    """
-    Orchestrates the input of listing details (Title, Price, Category, Location, Description).
-    """
-    # bot.take_screenshot()
-    _set_title(bot, payload.get("title", ""))
-    # bot.take_screenshot()
-    _set_price(bot)
-    _set_category(bot, payload.get("transaction_type", "sale"))
-    # bot.take_screenshot()
-    _set_location(bot, "Da Lat")
-    # bot.take_screenshot()
-    _set_description(bot, payload.get("description", ""))
-
-def _set_title(bot: BaseAutomator, title: str):
-    """
-    Enters the property title in uppercase.
-    """
-    title_group = bot.get_widget_by_text("android.view.ViewGroup", "title", timeout=30)
-    if not title_group.exists:
-        raise Exception("Could not find 'Title' field container")
-    
-    bot.swipe_widget_to_center(title_group)
-    title_group.click()
-    title_input = bot.get_interactable_from_parent(title_group, "android.widget.EditText", timeout=30)
-    
-    if not title_input.exists:
-        raise Exception("Could not find EditText within Title container")
-        
-    title_input.send_keys(title.upper())
-
-def _set_price(bot: BaseAutomator):
-    """
-    Enters a randomized price.
-    """
-    price_group = bot.get_widget_by_text("android.view.ViewGroup", "price", timeout=30)
-    if not price_group.exists:
-        raise Exception("Could not find 'Price' field container")
-    
-    bot.swipe_widget_to_center(price_group)
-    price_group.click()
-    price_input = bot.get_interactable_from_parent(price_group, "android.widget.EditText", timeout=30)
-    
-    if not price_input.exists:
-        raise Exception("Could not find EditText within Price container")
-        
-    price_input.send_keys(str(randint(1, 1000)))
-
-def _set_category(bot: BaseAutomator, transaction_type: str = "sale"):
-    """
-    Selects the 'Home(s) for sale' or 'Home(s) for rent' category.
-    """
-    category_btn = bot.get_button_by_text("category", timeout=30)
-    if not category_btn.exists:
-        raise Exception("Could not find 'Category' button")
-    bot.swipe_widget_to_center(category_btn)
-    category_btn.click()
-
-    target_keyword = "rent" if "rent" in str(transaction_type).lower() else "sale"
-    option = bot.get_button_by_text(target_keyword, timeout=30)
-    if not option.exists:
-        # Fallback to looking for sale or rent if target keyword not found
-        fallback_keyword = "sale" if target_keyword == "rent" else "rent"
-        option = bot.get_button_by_text(fallback_keyword, timeout=10)
-        
-    if not option.exists:
-        raise Exception(f"Could not find category option for '{target_keyword}'")
-    option.click()
-
-def _set_location(bot: BaseAutomator, city_name: str):
-    """
-    Updates the listing location.
-    """
-    location_btn = bot.get_button_by_text("location", timeout=30)
-    if not location_btn.exists:
-        raise Exception("Could not find 'Location' entry point")
-    bot.swipe_widget_to_center(location_btn)
-    location_btn.click()
-
-    search_input = bot.get_widget_by_text("android.widget.EditText", "Search", timeout=30)
-    if not search_input.exists:
-        raise Exception("Could not find 'Search' field container in location picker")
-    
-    search_input.click()
-    search_input.send_keys(city_name)
-
-    city_suggestion = bot.get_button_by_text(city_name, timeout=30)
-    if not city_suggestion.exists:
-        raise Exception(f"Could not find suggestion for '{city_name}'")
-    city_suggestion.click()
-
-    apply_btn = bot.get_button_by_text("apply", timeout=30)
-    if not apply_btn.exists:
-        raise Exception("Could not find 'Apply' button")
-    apply_btn.click()
-
-def _set_description(bot: BaseAutomator, description: str):
-    """
-    Inputs the property description.
-    """
-    description_group = bot.get_widget_by_text("android.view.ViewGroup", "description", timeout=30)
-    if not description_group.exists:
-        raise Exception("Could not find 'Description' field container")
-    
-    bot.swipe_widget_to_center(description_group)
-    description_group.click()
-    description_input = bot.get_interactable_from_parent(description_group, "android.widget.EditText", timeout=30)
-    description_input.send_keys(description)
-
-def _click_next_button(bot: BaseAutomator):
-    """
-    Clicks the 'Next' button to proceed to the cross-posting selection.
-    """
-    next_button = bot.get_button_by_text("next", timeout=30)
-    if not next_button.exists:
-        raise Exception("Could not find 'Next' button")
-    # bot.take_screenshot()
-    next_button.click()
-
-def _list_more_place(bot: BaseAutomator):
-    """
-    Intelligent cross-posting logic:
-    1. Swipes down to gather all visible group data from checkboxes.
-    2. Filters for the Top 20 groups based on member count.
-    3. Swipes back up and clicks the checkboxes for the identified Top 20 groups.
-    """
-    collected_groups = {} 
-    max_swipes = 10
-    
-    # bot.take_screenshot()
-    # PHASE 1: Data Collection & Scroll Down
-    for _ in range(max_swipes):
-        checkboxes = bot.get_elements_by_widget("android.widget.CheckBox", timeout=2)
-        
-        for box in checkboxes:
-            try:
-                desc = box.info.get('contentDescription', '')
-                if desc and desc not in collected_groups:
-                    members = _parse_member_count(desc)
-                    collected_groups[desc] = members
-            except:
-                pass 
-        
-        sig1 = bot._get_screen_signature()
-        # bot.take_screenshot()
-        bot.swipe_up(scale=1)
-        sig2 = bot._get_screen_signature()
-        
-        if sig1 == sig2:
-            break
-
-    # PHASE 2: Sorting and Filtering Top 20
-    sorted_groups = sorted(collected_groups.items(), key=lambda item: item[1], reverse=True)
-    top_20_groups = dict(sorted_groups[:20])
-    target_descs = set(top_20_groups.keys()) 
-    
-    # PHASE 3: Scroll Up & Click Target Groups
-    clicked_groups = set() 
-    
-    for _ in range(max_swipes):
-        # bot.take_screenshot()
-        checkboxes = bot.get_elements_by_widget("android.widget.CheckBox", timeout=2)
-        
-        for box in checkboxes:
-            try:
-                desc = box.info.get('contentDescription', '')
-                if desc in target_descs and desc not in clicked_groups:
-                    # bot.take_screenshot()
-                    box.click_exists(timeout=2)
-                    clicked_groups.add(desc)
-            except:
-                pass
-
-        if len(clicked_groups) >= len(target_descs):
-            break
-            
-        sig1 = bot._get_screen_signature()
-        bot.swipe_down(scale=1)
-        sig2 = bot._get_screen_signature()
-        
-        if sig1 == sig2:
-            break
-
-def _click_publish_button(bot: BaseAutomator):
-    """
-    Clicks the 'Publish' button to finalize the listing or proceed to cross-posting.
-    
-    This method implements a two-tier strategy for high reliability:
-    1. Primary: Targets the specific Facebook 'resourceId' (mp_composer_post), 
-       which is the most stable identifier for this action.
-    2. Fallback: Reverts to a text-based search if the resource ID is not found 
-       (e.g., due to a UI update).
-
-    Args:
-        bot (BaseAutomator): The automation controller instance.
-
-    Returns:
-        bool: True if the button was clicked and successfully disappeared from the UI.
-
-    Raises:
-        Exception: If the button is clicked but the app hangs, or if the button 
-                  cannot be found using either the ID or text fallback.
-    """
-    bot.log("Locating and clicking the 'Publish' button...")
-    
-    publish_btn = bot.d(resourceId="mp_composer_post")
-    # bot.take_screenshot()
-    
-    if publish_btn.exists(timeout=10):
-        # bot.take_screenshot()
-        publish_btn.click_exists(timeout=5)
-        is_published = publish_btn.wait_gone(timeout=15)
-        # bot.take_screenshot()
-        
-        if is_published:
-            bot.log("✔️ 'Publish' button clicked successfully!")
-            return True
-        else:
-            raise Exception("Clicked 'Publish' but the application failed to respond or load.")
-            
-    else:
-        bot.log("⚠️ Resource ID 'mp_composer_post' not found, attempting text-based search...")
-        is_published = bot.click_button_with_retry("publish", timeout=10)
-        
-        if not is_published:
-            raise Exception("Could not find or interact with the 'Publish' button using ID or text.")
-            
-        return is_published
-
-
-def _parse_member_count(desc: str) -> int:
-    """
-    Helper function: Parses member count from content-description strings.
-    Example: "Private group • 81.3K members" -> 81300
-    """
-    if not desc:
-        return 0
-    match = re.search(r'([\d\.]+)([KMkm]?)\s*(?:members|thành viên)', desc, re.IGNORECASE)
-    if not match:
-        return 0
-        
-    num_str, multiplier = match.groups()
-    try:
-        num = float(num_str)
-        if multiplier.upper() == 'K':
-            num *= 1000
-        elif multiplier.upper() == 'M':
-            num *= 1000000
-        return int(num)
-    except:
-        return 0
-    

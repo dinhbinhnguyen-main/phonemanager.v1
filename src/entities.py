@@ -91,6 +91,7 @@ class Social(BaseEntity):
     social_status: int = 0
     social_group: int = 0
     social_platform: str = "facebook"
+    social_note: str = ""
 
 
 @dataclass

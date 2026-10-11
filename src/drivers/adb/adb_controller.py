@@ -260,6 +260,113 @@ class ADBController:
 
         return success
 
+    def disable_keyboard(self, user_id: Optional[int] = None) -> bool:
+        """
+        Completely disables the soft keyboard for single/multi-user space on Android.
+        1. Suppresses on-screen virtual keyboard popup via secure settings (show_ime_with_hard_keyboard 0).
+        2. Ensures FastInputIME / AdbKeyboard package is installed and enabled for target user.
+        3. Sets default IME to FastInputIME.
+        """
+        try:
+            target_user = user_id if user_id is not None else self.get_current_user()
+            
+            # 1. Disable on-screen virtual keyboard popup globally & for user
+            self._shell(f"settings put secure --user {target_user} show_ime_with_hard_keyboard 0")
+            self._shell("settings put secure show_ime_with_hard_keyboard 0")
+            
+            # 2. Ensure uiautomator package exists in secondary user profile
+            if target_user != 0:
+                self._shell(f"pm install-existing --user {target_user} com.github.uiautomator")
+                self._shell(f"pm install-existing --user {target_user} com.github.uiautomator.test")
+                self._shell(f"pm install-existing --user {target_user} com.android.adbkeyboard")
+            
+            # 3. Detect available fast input IME
+            ime_list = self._shell(f"ime list -s --user {target_user}")
+            if not ime_list or "error" in ime_list.lower() or "unknown" in ime_list.lower():
+                ime_list = self._shell("ime list -s -a")
+                
+            fast_ime = None
+            for candidate in [
+                "com.github.uiautomator/.FastInputIME",
+                "com.github.uiautomator.test/com.github.uiautomator.fastinput.FastInputIME",
+                "com.android.adbkeyboard/.AdbIME"
+            ]:
+                if candidate in ime_list or candidate.split("/")[0] in ime_list:
+                    fast_ime = candidate
+                    break
+                    
+            if not fast_ime:
+                fast_ime = "com.github.uiautomator/.FastInputIME"
+                
+            # 4. Enable and set IME
+            self._shell(f"ime enable --user {target_user} {fast_ime}")
+            self._shell(f"ime set --user {target_user} {fast_ime}")
+            self._shell(f"settings put --user {target_user} secure default_input_method {fast_ime}")
+            
+            if target_user != 0:
+                self._shell(f"ime enable --user 0 {fast_ime}")
+                self._shell(f"ime set --user 0 {fast_ime}")
+                self._shell(f"settings put --user 0 secure default_input_method {fast_ime}")
+                
+            return True
+        except Exception as e:
+            from src.utils.logger import logger
+            logger.error(f"[{self.device_id}] Error disabling keyboard for user {user_id}: {e}")
+            return False
+
+    def enable_keyboard(self, user_id: Optional[int] = None) -> bool:
+        """
+        Restores stock soft keyboard.
+        """
+        try:
+            target_user = user_id if user_id is not None else self.get_current_user()
+            self._shell(f"settings put secure --user {target_user} show_ime_with_hard_keyboard 1")
+            self._shell("settings put secure show_ime_with_hard_keyboard 1")
+            
+            ime_list = self._shell(f"ime list -s --user {target_user}")
+            if not ime_list or "error" in ime_list.lower():
+                ime_list = self._shell("ime list -s -a")
+                
+            stock_ime = None
+            for line in ime_list.splitlines():
+                line = line.strip()
+                if not line or "uiautomator" in line or "adbkeyboard" in line:
+                    continue
+                if any(k in line for k in ["latin", "gboard", "honeyboard", "samsung", "inputmethod", "pinyin", "touchtype"]):
+                    stock_ime = line
+                    break
+                    
+            if stock_ime:
+                self._shell(f"ime enable --user {target_user} {stock_ime}")
+                self._shell(f"ime set --user {target_user} {stock_ime}")
+                self._shell(f"settings put --user {target_user} secure default_input_method {stock_ime}")
+            return True
+        except Exception as e:
+            from src.utils.logger import logger
+            logger.error(f"[{self.device_id}] Error restoring keyboard for user {user_id}: {e}")
+            return False
+
+    def is_keyboard_shown(self) -> bool:
+        """Checks if soft keyboard is currently visible on screen."""
+        try:
+            dumpsys = self._shell("dumpsys input_method")
+            if "mInputShown=true" in dumpsys or "mIsInputViewShown=true" in dumpsys:
+                return True
+            return False
+        except Exception:
+            return False
+
+    def hide_keyboard(self) -> bool:
+        """Actively dismisses soft keyboard if currently open."""
+        try:
+            if self.is_keyboard_shown():
+                self._shell("input keyevent 111")  # KEYCODE_ESCAPE
+                sleep(0.3)
+                return True
+            return False
+        except Exception:
+            return False
+
     def grand_apk_permission(self, user_id: int, package_name: str, permissions: List[str] = DEFAULT_APP_PERMISSIONS) -> bool:
         success = True
         self.block_app_notifications(user_id, package_name)

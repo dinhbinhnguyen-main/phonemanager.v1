@@ -27,3 +27,6 @@ upload_progress.json
 # Uncomment if you want to exclude local media/databases:
 # /repositories/images/
 # /repositories/database/*.db
+
+tests/dumps/
+tests/dumps/**

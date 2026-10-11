@@ -21,6 +21,7 @@ SQL_SCHEMA = [
         social_status INT DEFAULT 0,
         social_group INT DEFAULT 0,
         social_platform VARCHAR(50) DEFAULT 'facebook',
+        social_note TEXT DEFAULT '',
         created_at INTEGER,
         updated_at INTEGER,
         CONSTRAINT fk_social_user FOREIGN KEY (user_uuid) REFERENCES users(uuid) ON DELETE SET NULL
